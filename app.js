@@ -110,7 +110,9 @@ function logFileLink(user, name, blob) {
   a.className = "msg-file";
   a.href = URL.createObjectURL(blob);
   a.download = name;
-  a.innerHTML = `📄 ${name}  <span style="color:var(--text-lo);font-size:0.65rem">(click to download)</span>`;
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  a.innerHTML = `📄 <span class="file-name">${name}</span><span class="file-hint">↓ download</span>`;
 
   wrap.append(header, a);
   messagesEl.appendChild(wrap);
@@ -362,20 +364,30 @@ document.getElementById("copy-id").onclick = () => {
 /* ============================================================
    VOICE / VIDEO
 ============================================================ */
-async function startMedia(withVideo = false) {
+async function startMedia() {
+  /* Always request audio + video so camera toggle works */
   try {
     localStream = await navigator.mediaDevices.getUserMedia({
       audio: { noiseSuppression: true, echoCancellation: true, autoGainControl: true },
-      video: withVideo
+      video: true
     });
   } catch (e) {
-    showToast("Microphone access denied.");
-    return;
+    /* Video denied — fall back to audio only */
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({
+        audio: { noiseSuppression: true, echoCancellation: true, autoGainControl: true },
+        video: false
+      });
+    } catch (e2) {
+      showToast("Microphone access denied.");
+      return;
+    }
   }
 
   isInCall = true;
+  cameraOn = localStream.getVideoTracks().length > 0;
   updateCallUI(true);
-  addVideoEl("local", localStream, true);
+  setVideoEl("local", localStream, true);
 
   /* Call all existing peers */
   Object.values(connections).forEach(conn => {
@@ -396,9 +408,14 @@ function setupMediaCall(call) {
 /* ============================================================
    VIDEO ELEMENT MANAGEMENT
 ============================================================ */
-function addVideoEl(id, stream, isLocal = false) {
-  if (document.getElementById("vid-" + id)) return;
-  const video       = document.createElement("video");
+function setVideoEl(id, stream, isLocal = false) {
+  let video = document.getElementById("vid-" + id);
+  if (video) {
+    /* Element exists — just swap the stream (used by screen share) */
+    video.srcObject = stream;
+    return;
+  }
+  video             = document.createElement("video");
   video.id          = "vid-" + id;
   video.srcObject   = stream;
   video.autoplay    = true;
@@ -407,6 +424,11 @@ function addVideoEl(id, stream, isLocal = false) {
   if (isLocal) video.classList.add("local-video");
   videoGrid.appendChild(video);
   videoGrid.classList.remove("hidden");
+}
+
+/* Keep old name as alias so setupMediaCall still works */
+function addVideoEl(id, stream, isLocal = false) {
+  setVideoEl(id, stream, isLocal);
 }
 
 function removeVideoEl(id) {
@@ -419,7 +441,7 @@ function removeVideoEl(id) {
    MEDIA CONTROLS
 ============================================================ */
 /* Join Voice */
-joinCallBtn.onclick = () => startMedia(false);
+joinCallBtn.onclick = () => startMedia();
 
 /* Leave Voice */
 leaveCallBtn.onclick = () => {
@@ -492,10 +514,10 @@ btnScreen.onclick = async () => {
     try {
       const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
       const screenTrack  = screenStream.getVideoTracks()[0];
+      /* Replace track in all active peer connections */
       replaceVideoTrack(screenTrack);
-      /* Update local preview */
-      const localVid = document.getElementById("vid-local");
-      if (localVid) localVid.srcObject = screenStream;
+      /* Swap local preview to screen stream */
+      setVideoEl("local", screenStream, true);
       screenTrack.onended = stopScreenShare;
       isScreenShare = true;
       btnScreen.querySelector("small").textContent = "Stop Share";
@@ -519,14 +541,23 @@ function replaceVideoTrack(newTrack) {
 
 async function stopScreenShare() {
   if (!isScreenShare) return;
+  isScreenShare = false;
   try {
+    /* Get a fresh camera track */
     const camStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
     const camTrack  = camStream.getVideoTracks()[0];
+    /* Swap into localStream so future state is correct */
+    const oldVideo = localStream.getVideoTracks()[0];
+    if (oldVideo) { localStream.removeTrack(oldVideo); oldVideo.stop(); }
+    localStream.addTrack(camTrack);
+    /* Replace in peer connections */
     replaceVideoTrack(camTrack);
-    const localVid = document.getElementById("vid-local");
-    if (localVid) localVid.srcObject = camStream;
-  } catch (e) { /* no cam fallback */ }
-  isScreenShare = false;
+    /* Restore local preview */
+    setVideoEl("local", localStream, true);
+  } catch (e) {
+    /* Camera unavailable — just show whatever localStream has */
+    setVideoEl("local", localStream, true);
+  }
   btnScreen.querySelector("small").textContent = "Screen";
   btnScreen.classList.remove("screen-active");
 }
@@ -565,25 +596,42 @@ function updateCallUI(inCall) {
 /* ============================================================
    FILE SHARING
 ============================================================ */
+async function sendToPeer(conn, obj) {
+  /* Awaitable single-peer encrypted send */
+  return new Promise(async (resolve) => {
+    if (!conn.open || !sessionKeys[conn.peer]) { resolve(); return; }
+    const payload = await encryptData(conn.peer, obj);
+    conn.send({ encrypted: true, payload });
+    resolve();
+  });
+}
+
 fileInput.onchange = async () => {
   const file = fileInput.files[0];
   if (!file) return;
   fileInput.value = "";
 
+  const peerList  = Object.values(connections).filter(c => c.open && sessionKeys[c.peer]);
+  if (peerList.length === 0) { showToast("No peers connected."); return; }
+
   const id        = Math.random().toString(36).slice(2);
   const chunkSize = 16000;
 
-  broadcastEncrypted({ type: "file-meta", id, name: file.name, user: username });
+  /* Send sequentially to every peer so chunks arrive in order */
+  for (const conn of peerList) {
+    await sendToPeer(conn, { type: "file-meta", id, name: file.name, user: username });
 
-  let offset = 0;
-  while (offset < file.size) {
-    const slice  = file.slice(offset, offset + chunkSize);
-    const buffer = await slice.arrayBuffer();
-    broadcastEncrypted({ type: "file-chunk", id, chunk: Array.from(new Uint8Array(buffer)) });
-    offset += chunkSize;
+    let offset = 0;
+    while (offset < file.size) {
+      const slice  = file.slice(offset, offset + chunkSize);
+      const buffer = await slice.arrayBuffer();
+      await sendToPeer(conn, { type: "file-chunk", id, chunk: Array.from(new Uint8Array(buffer)) });
+      offset += chunkSize;
+    }
+
+    await sendToPeer(conn, { type: "file-end", id });
   }
 
-  broadcastEncrypted({ type: "file-end", id });
   logMessage("SYSTEM", `File sent: ${file.name}`, true);
   showToast(`Sent: ${file.name}`);
 };

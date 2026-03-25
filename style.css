@@ -428,19 +428,33 @@ body {
 .msg-file {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 8px 12px;
+  padding: 9px 14px;
   margin-top: 4px;
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  color: var(--accent-green);
   text-decoration: none;
   transition: var(--transition);
+  cursor: pointer;
 }
-.msg-file:hover { border-color: var(--accent-green); background: var(--bg-hover); }
+.msg-file:hover { border-color: var(--accent-green); background: var(--bg-hover); box-shadow: 0 0 10px #57f28720; }
+.file-name {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--accent-green);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.file-hint {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: var(--text-lo);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
 
 /* ============================================================
    INPUT BAR
