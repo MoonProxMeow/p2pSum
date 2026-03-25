@@ -233,21 +233,12 @@ body {
   padding: 6px 10px;
   font-family: var(--font-mono);
   font-size: 0.7rem;
-  color: var(--accent-green);
+  color: var(--text-hi);
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
-.peer-item::before {
-  content: '●';
-  color: var(--accent-green);
-  font-size: 0.5rem;
-  animation: pulse 2s infinite;
-}
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
-}
+
 
 /* Footer */
 .sidebar-footer {
@@ -372,7 +363,88 @@ body {
 }
 
 /* ============================================================
-   MESSAGES
+   MY PROFILE (sidebar)
+============================================================ */
+.my-profile {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 0 12px 10px;
+}
+.avatar-wrap {
+  position: relative;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.my-avatar-img {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  display: block;
+  object-fit: cover;
+  transition: var(--transition);
+  background: var(--bg-panel);
+}
+.avatar-wrap:hover .my-avatar-img {
+  border-color: var(--accent);
+  filter: brightness(0.75);
+}
+.avatar-edit-badge {
+  position: absolute;
+  bottom: 0; right: 0;
+  background: var(--accent);
+  color: white;
+  font-size: 0.6rem;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  pointer-events: none;
+}
+
+/* Peer list avatars */
+.peer-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: var(--bg-panel);
+}
+
+/* ============================================================
+   MESSAGES — avatar layout
+============================================================ */
+.message {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  animation: msgIn 0.15s ease;
+}
+.msg-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  margin-top: 2px;
+  background: var(--bg-panel);
+}
+.msg-right {
+  flex: 1;
+  min-width: 0;
+}
+.msg-system {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-lo);
+  text-align: center;
+  padding: 3px 0;
+  width: 100%;
+}
+
+/* ============================================================
+   MESSAGES CONTAINER
 ============================================================ */
 .messages {
   flex: 1;
@@ -380,19 +452,13 @@ body {
   padding: 16px 18px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
 }
 .messages::-webkit-scrollbar { width: 4px; }
 .messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 
-.message {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  animation: msgIn 0.15s ease;
-}
 @keyframes msgIn {
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: none; }
