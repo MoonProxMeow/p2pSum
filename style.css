@@ -25,7 +25,7 @@ body {
   margin-top: 6px;
 }
 
-/* Chat */
+/* Chat area */
 
 .chat-area {
   flex: 1;
@@ -64,6 +64,9 @@ body {
   margin-right: 10px;
 }
 
+#audio-container video,
 #audio-container audio {
   display: block;
+  width: 200px;
+  margin-bottom: 5px;
 }

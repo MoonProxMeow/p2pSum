@@ -2,10 +2,9 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>P2P Discord</title>
+<title>P2P Network</title>
 <link rel="stylesheet" href="style.css">
 </head>
-
 <body>
 
 <div id="app">
@@ -32,6 +31,7 @@
   <!-- Main -->
   <div class="chat-area">
 
+    <!-- Voice / Video / Screen -->
     <div class="voice-bar">
       <button id="join-call">Join Voice</button>
       <button id="leave-call">Leave Voice</button>
@@ -39,8 +39,10 @@
 
     <div id="audio-container"></div>
 
+    <!-- Chat messages -->
     <div id="messages"></div>
 
+    <!-- Message input -->
     <div class="input-bar">
       <input id="message" placeholder="Message">
       <button id="send">Send</button>
@@ -52,6 +54,5 @@
 
 <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js"></script>
 <script src="app.js"></script>
-
 </body>
 </html>
