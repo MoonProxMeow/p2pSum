@@ -1,6 +1,6 @@
 body {
   margin: 0;
-  font-family: Arial;
+  font-family: Arial, Helvetica, sans-serif;
   background: #36393f;
   color: white;
 }
@@ -10,16 +10,32 @@ body {
   height: 100vh;
 }
 
+/* Sidebar */
+
 .sidebar {
-  width: 250px;
+  width: 260px;
   background: #2f3136;
-  padding: 10px;
+  padding: 12px;
+  box-sizing: border-box;
 }
+
+.sidebar input,
+.sidebar button {
+  width: 100%;
+  margin-top: 6px;
+}
+
+/* Chat */
 
 .chat-area {
   flex: 1;
   display: flex;
   flex-direction: column;
+}
+
+.voice-bar {
+  background: #202225;
+  padding: 10px;
 }
 
 #messages {
@@ -33,8 +49,8 @@ body {
 }
 
 .username {
-  font-weight: bold;
   color: #7289da;
+  font-weight: bold;
 }
 
 .input-bar {
@@ -46,4 +62,8 @@ body {
 .input-bar input {
   flex: 1;
   margin-right: 10px;
+}
+
+#audio-container audio {
+  display: block;
 }
