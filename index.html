@@ -1,37 +1,26 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>P2P Network</title>
+<title>P2P Discord E2EE</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <div id="app">
-
-  <!-- Sidebar -->
   <div class="sidebar">
     <h2>P2P Chat</h2>
-
     <div>Your ID:</div>
     <div id="my-id">...</div>
-
     <input id="username" placeholder="Username">
-
     <button id="host">Create Room</button>
-
     <input id="host-id" placeholder="Host ID">
     <button id="join">Join Room</button>
-
     <hr>
-
     <div id="peers"></div>
   </div>
 
-  <!-- Main -->
   <div class="chat-area">
-
-    <!-- Voice / Video / Screen -->
     <div class="voice-bar">
       <button id="join-call">Join Voice</button>
       <button id="leave-call">Leave Voice</button>
@@ -39,17 +28,13 @@
 
     <div id="audio-container"></div>
 
-    <!-- Chat messages -->
     <div id="messages"></div>
 
-    <!-- Message input -->
     <div class="input-bar">
       <input id="message" placeholder="Message">
       <button id="send">Send</button>
     </div>
-
   </div>
-
 </div>
 
 <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js"></script>

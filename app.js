@@ -6,9 +6,11 @@ const peer = new Peer();
 let username = "Anonymous";
 let isHost = false;
 
-const connections = {};
-const mediaCalls = {};
+const connections = {};      // Data connections
+const mediaCalls = {};       // Media connections
 let localStream = null;
+
+const sessionKeys = {};      // AES keys per peer
 
 /* =========================
    UI Elements
@@ -18,6 +20,9 @@ const peersEl = document.getElementById("peers");
 const messagesEl = document.getElementById("messages");
 const messageInput = document.getElementById("message");
 const audioContainer = document.getElementById("audio-container");
+
+const joinCallBtn = document.getElementById("join-call");
+const leaveCallBtn = document.getElementById("leave-call");
 
 /* =========================
    Helpers
@@ -30,17 +35,58 @@ function logMessage(user, text){
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-function broadcast(data, exclude=null){
-  Object.values(connections).forEach(c=>{
-    if(c.open && c.peer!==exclude) c.send(data);
-  });
-}
-
 function updatePeerList(){
   peersEl.innerHTML="<b>Connected:</b><br>";
   Object.keys(connections).forEach(id=>{
     peersEl.innerHTML+=id+"<br>";
   });
+}
+
+function broadcastEncrypted(data, exclude=null){
+  Object.entries(connections).forEach(([peerId, conn])=>{
+    if(conn.open && peerId!==exclude){
+      if(sessionKeys[peerId]){
+        encryptData(conn.peer, data).then(encrypted=>{
+          conn.send({ encrypted:true, payload:encrypted });
+        });
+      }
+    }
+  });
+}
+
+/* =========================
+   Encryption Utilities
+========================= */
+async function generateAESKey(){
+  return crypto.subtle.generateKey(
+    {name:"AES-GCM", length:256},
+    true,
+    ["encrypt","decrypt"]
+  );
+}
+
+async function exportKey(key){
+  return crypto.subtle.exportKey("raw", key);
+}
+
+async function importKey(raw){
+  return crypto.subtle.importKey("raw", raw, "AES-GCM", true, ["encrypt","decrypt"]);
+}
+
+async function encryptData(peerId, obj){
+  const key = sessionKeys[peerId];
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const data = new TextEncoder().encode(JSON.stringify(obj));
+  const encrypted = await crypto.subtle.encrypt({name:"AES-GCM", iv}, key, data);
+  return {iv:Array.from(iv), data:Array.from(new Uint8Array(encrypted))};
+}
+
+async function decryptData(peerId, payload){
+  const key = sessionKeys[peerId];
+  const iv = new Uint8Array(payload.iv);
+  const data = new Uint8Array(payload.data);
+  const decrypted = await crypto.subtle.decrypt({name:"AES-GCM", iv}, key, data);
+  return JSON.parse(new TextDecoder().decode(decrypted));
 }
 
 /* =========================
@@ -53,8 +99,7 @@ peer.on("connection", conn=>{
 });
 
 peer.on("call", call=>{
-  if(!localStream) return;
-  call.answer(localStream);
+  if(localStream) call.answer(localStream);
   setupMediaCall(call);
 });
 
@@ -65,9 +110,29 @@ function setupConnection(conn){
   connections[conn.peer] = conn;
   updatePeerList();
 
-  conn.on("data", data=>handleData(conn,data));
+  conn.on("data", async data=>{
+    // Setup AES key if first connection
+    if(data.type==="key"){
+      sessionKeys[conn.peer] = await importKey(new Uint8Array(data.key).buffer);
+    }
 
-  conn.on("open", ()=>{
+    // Handle encrypted messages
+    if(data.encrypted){
+      if(sessionKeys[conn.peer]){
+        const obj = await decryptData(conn.peer, data.payload);
+        handleData(conn, obj);
+      }
+    } else handleData(conn,data);
+  });
+
+  conn.on("open", async ()=>{
+    // generate session key for this connection
+    const key = await generateAESKey();
+    sessionKeys[conn.peer] = key;
+    const raw = new Uint8Array(await exportKey(key));
+    conn.send({type:"key", key:raw});
+
+    // initiate media
     if(localStream){
       const call = peer.call(conn.peer, localStream);
       setupMediaCall(call);
@@ -76,84 +141,64 @@ function setupConnection(conn){
 
   conn.on("close", ()=>{
     delete connections[conn.peer];
+    delete sessionKeys[conn.peer];
     updatePeerList();
   });
 }
 
+/* =========================
+   Chat
+========================= */
 function handleData(conn,data){
   if(data.type==="message"){
     logMessage(data.user,data.text);
-    broadcast(data, conn.peer);
-  }
-
-  /* File Sharing */
-  if(data.type==="file-meta"){
-    receiveFileMeta[data.id] = data;
-    receivedBuffers[data.id] = [];
-  }
-  if(data.type==="file-chunk"){
-    receivedBuffers[data.id].push(data.chunk);
-  }
-  if(data.type==="file-end"){
-    const blob = new Blob(receivedBuffers[data.id]);
-    const url = URL.createObjectURL(blob);
-
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = receiveFileMeta[data.id].name;
-    a.textContent = `Download ${receiveFileMeta[data.id].name}`;
-    messagesEl.appendChild(a);
-
-    delete receivedBuffers[data.id];
   }
 }
 
-/* =========================
-   Messaging
-========================= */
 function sendMessage(){
   const text = messageInput.value.trim();
   if(!text) return;
   messageInput.value="";
-
   const data = { type:"message", user:username, text };
   logMessage(username,text);
-  broadcast(data);
+  broadcastEncrypted(data);
 }
 
-document.getElementById("send").onclick=sendMessage;
+document.getElementById("send").onclick = sendMessage;
 messageInput.addEventListener("keydown", e=>{
   if(e.key==="Enter"){ e.preventDefault(); sendMessage(); }
 });
 
 /* =========================
-   Voice/Video/Screen
+   Voice / Video / Screen
 ========================= */
 let isMuted=false;
 let isDeafened=false;
 let isScreenSharing=false;
+let cameraEnabled=true;
 
 async function startMedia(video=false){
   localStream = await navigator.mediaDevices.getUserMedia({
     audio:{ noiseSuppression:true, echoCancellation:true, autoGainControl:true },
     video:video
   });
+  addVideo("local", localStream, true);
 
   Object.values(connections).forEach(conn=>{
     const call = peer.call(conn.peer, localStream);
     setupMediaCall(call);
   });
-
-  addVideo("local", localStream, true);
 }
 
 function setupMediaCall(call){
   mediaCalls[call.peer] = call;
   call.on("stream", stream => addVideo(call.peer, stream, false));
-  call.on("close", ()=>{ removeVideo(call.peer); });
+  call.on("close", ()=>removeVideo(call.peer));
 }
 
-/* Video elements */
+/* =========================
+   Video Elements
+========================= */
 function addVideo(id, stream, muted=false){
   if(document.getElementById("video-"+id)) return;
   const video = document.createElement("video");
@@ -165,62 +210,64 @@ function addVideo(id, stream, muted=false){
   audioContainer.appendChild(video);
 }
 function removeVideo(id){
-  const el = document.getElementById("video-"+id);
+  const el=document.getElementById("video-"+id);
   if(el) el.remove();
 }
 
 /* =========================
-   Voice Buttons
+   Media Controls
 ========================= */
-document.getElementById("join-call").onclick = ()=>startMedia(false);
-document.getElementById("leave-call").onclick = ()=>{
-  if(localStream){ localStream.getTracks().forEach(t=>t.stop()); localStream=null; }
+joinCallBtn.onclick = ()=>startMedia(false);
+
+leaveCallBtn.onclick = ()=>{
+  if(localStream){
+    localStream.getTracks().forEach(t=>t.stop());
+    localStream=null;
+  }
   Object.values(mediaCalls).forEach(c=>c.close());
   audioContainer.innerHTML="";
+  leaveCallBtn.textContent="Leave Voice";
 };
 
-/* =========================
-   Extra Buttons
-========================= */
 const voiceBar = document.querySelector(".voice-bar");
-
-const videoBtn = document.createElement("button");
-videoBtn.textContent="Start Video";
-
-const muteBtn = document.createElement("button");
+const videoBtn=document.createElement("button");
+videoBtn.textContent="Toggle Camera";
+const muteBtn=document.createElement("button");
 muteBtn.textContent="Mute";
-
-const deafenBtn = document.createElement("button");
+const deafenBtn=document.createElement("button");
 deafenBtn.textContent="Deafen";
-
-const screenBtn = document.createElement("button");
+const screenBtn=document.createElement("button");
 screenBtn.textContent="Share Screen";
-
-const fileInput = document.createElement("input");
+const fileInput=document.createElement("input");
 fileInput.type="file";
 
 voiceBar.append(videoBtn,muteBtn,deafenBtn,screenBtn,fileInput);
 
-/* Video Button */
-videoBtn.onclick = ()=>startMedia(true);
-
-/* Mute Button */
-muteBtn.onclick = ()=>{
+/* Toggle camera */
+videoBtn.onclick = ()=>{
   if(!localStream) return;
-  isMuted=!isMuted;
-  localStream.getAudioTracks().forEach(t=>t.enabled=!isMuted);
-  muteBtn.textContent=isMuted?"Unmute":"Mute";
+  cameraEnabled = !cameraEnabled;
+  localStream.getVideoTracks().forEach(t=>t.enabled=cameraEnabled);
+  videoBtn.textContent = cameraEnabled ? "Camera On" : "Camera Off";
 };
 
-/* Deafen Button */
+/* Mute */
+muteBtn.onclick = ()=>{
+  if(!localStream) return;
+  isMuted = !isMuted;
+  localStream.getAudioTracks().forEach(t=>t.enabled=!isMuted);
+  muteBtn.textContent = isMuted ? "Unmute" : "Mute";
+};
+
+/* Deafen */
 deafenBtn.onclick = ()=>{
   if(!localStream) return;
-  isDeafened=!isDeafened;
+  isDeafened = !isDeafened;
   localStream.getAudioTracks().forEach(t=>t.enabled=!isDeafened);
   document.querySelectorAll("video,audio").forEach(el=>{
     if(el.id!=="video-local") el.muted=isDeafened;
   });
-  deafenBtn.textContent=isDeafened?"Undeafen":"Deafen";
+  deafenBtn.textContent = isDeafened ? "Undeafen" : "Deafen";
 };
 
 /* Screen Share */
@@ -245,6 +292,7 @@ function replaceVideoTrack(newTrack){
 }
 
 async function stopScreenShare(){
+  if(!localStream) return;
   const camStream = await navigator.mediaDevices.getUserMedia({ video:true, audio:false });
   const camTrack = camStream.getVideoTracks()[0];
   replaceVideoTrack(camTrack);
@@ -262,18 +310,26 @@ const receivedBuffers={};
 fileInput.onchange = async ()=>{
   const file = fileInput.files[0];
   const id = Math.random().toString(36);
-
-  broadcast({ type:"file-meta", id, name:file.name });
-
   const chunkSize = 16000;
-  let offset = 0;
-  while(offset < file.size){
+
+  for(const peerId in connections){
+    broadcastEncrypted({type:"file-meta",id,name:file.name});
+  }
+
+  let offset=0;
+  while(offset<file.size){
     const slice = file.slice(offset,offset+chunkSize);
     const buffer = await slice.arrayBuffer();
-    broadcast({ type:"file-chunk", id, chunk:buffer });
-    offset += chunkSize;
+    for(const peerId in connections){
+      broadcastEncrypted({type:"file-chunk",id,chunk:Array.from(new Uint8Array(buffer))});
+    }
+    offset+=chunkSize;
   }
-  broadcast({ type:"file-end", id });
+
+  for(const peerId in connections){
+    broadcastEncrypted({type:"file-end",id});
+  }
+
   logMessage("SYSTEM","Sent file: "+file.name);
 };
 
@@ -282,12 +338,12 @@ fileInput.onchange = async ()=>{
 ========================= */
 document.getElementById("host").onclick = ()=>{
   username = document.getElementById("username").value || "Host";
-  isHost = true;
+  isHost=true;
 };
 
 document.getElementById("join").onclick = ()=>{
   username = document.getElementById("username").value || "User";
-  const hostId = document.getElementById("host-id").value;
+  const hostId=document.getElementById("host-id").value;
   const conn = peer.connect(hostId);
   setupConnection(conn);
 };
