@@ -2,40 +2,101 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>P2P Discord E2EE</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NexTalk — P2P E2EE Chat</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Syne:wght@400;600;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <div id="app">
+
+  <!-- SIDEBAR -->
   <div class="sidebar">
-    <h2>P2P Chat</h2>
-    <div>Your ID:</div>
-    <div id="my-id">...</div>
-    <input id="username" placeholder="Username">
-    <button id="host">Create Room</button>
-    <input id="host-id" placeholder="Host ID">
-    <button id="join">Join Room</button>
-    <hr>
-    <div id="peers"></div>
+    <div class="sidebar-header">
+      <div class="logo">NexTalk</div>
+      <div class="logo-sub">P2P · E2EE</div>
+    </div>
+
+    <div class="id-box">
+      <div class="id-label">YOUR NODE ID</div>
+      <div id="my-id" class="id-value">generating…</div>
+      <button id="copy-id" class="copy-btn" title="Copy ID">⎘</button>
+    </div>
+
+    <div class="form-group">
+      <label>Username</label>
+      <input id="username" placeholder="Enter name…">
+    </div>
+
+    <div class="room-actions">
+      <button id="host" class="btn btn-primary">Create Room</button>
+      <div class="divider">or</div>
+      <input id="host-id" placeholder="Paste host ID…">
+      <button id="join" class="btn btn-secondary">Join Room</button>
+    </div>
+
+    <div class="peers-section">
+      <div class="section-label">CONNECTED PEERS</div>
+      <div id="peers" class="peers-list"><span class="empty-peers">No peers yet</span></div>
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="enc-badge">🔒 AES-256-GCM E2EE</div>
+    </div>
   </div>
 
+  <!-- MAIN CHAT AREA -->
   <div class="chat-area">
-    <div class="voice-bar">
-      <button id="join-call">Join Voice</button>
-      <button id="leave-call">Leave Voice</button>
+
+    <!-- VOICE BAR -->
+    <div class="voice-bar" id="voice-bar">
+      <div class="voice-controls-left">
+        <button id="join-call" class="vc-btn vc-join">
+          <span class="vc-icon">🎙</span> Join Voice
+        </button>
+        <button id="leave-call" class="vc-btn vc-leave" disabled>
+          <span class="vc-icon">📵</span> Leave Voice
+        </button>
+      </div>
+      <div class="voice-controls-right" id="media-controls">
+        <button id="btn-camera" class="icon-btn" title="Toggle Camera" disabled>
+          <span>📷</span><small>Camera</small>
+        </button>
+        <button id="btn-mute" class="icon-btn" title="Toggle Mute" disabled>
+          <span>🎙</span><small>Mute</small>
+        </button>
+        <button id="btn-deafen" class="icon-btn" title="Toggle Deafen" disabled>
+          <span>🔊</span><small>Deafen</small>
+        </button>
+        <button id="btn-screen" class="icon-btn" title="Share Screen" disabled>
+          <span>🖥</span><small>Screen</small>
+        </button>
+        <label class="icon-btn file-label" title="Send File">
+          <span>📎</span><small>File</small>
+          <input type="file" id="file-input" style="display:none">
+        </label>
+      </div>
     </div>
 
-    <div id="audio-container"></div>
+    <!-- VIDEO GRID -->
+    <div id="video-grid" class="video-grid hidden"></div>
 
-    <div id="messages"></div>
+    <!-- MESSAGES -->
+    <div id="messages" class="messages"></div>
 
+    <!-- INPUT BAR -->
     <div class="input-bar">
-      <input id="message" placeholder="Message">
-      <button id="send">Send</button>
+      <input id="message" placeholder="Send a message…" autocomplete="off">
+      <button id="send" class="send-btn">Send</button>
     </div>
+
   </div>
 </div>
+
+<div id="toast" class="toast hidden"></div>
 
 <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js"></script>
 <script src="app.js"></script>
