@@ -1,7 +1,8 @@
+<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
-<title>P2P Discord Style</title>
+<title>P2P Discord</title>
 <link rel="stylesheet" href="style.css">
 </head>
 
@@ -9,28 +10,42 @@
 
 <div id="app">
 
+  <!-- Sidebar -->
   <div class="sidebar">
-    <h3>P2P Chat</h3>
+    <h2>P2P Chat</h2>
+
     <div>Your ID:</div>
     <div id="my-id">...</div>
 
     <input id="username" placeholder="Username">
+
     <button id="host">Create Room</button>
 
     <input id="host-id" placeholder="Host ID">
     <button id="join">Join Room</button>
 
     <hr>
+
     <div id="peers"></div>
   </div>
 
+  <!-- Main -->
   <div class="chat-area">
+
+    <div class="voice-bar">
+      <button id="join-call">Join Voice</button>
+      <button id="leave-call">Leave Voice</button>
+    </div>
+
+    <div id="audio-container"></div>
+
     <div id="messages"></div>
 
     <div class="input-bar">
       <input id="message" placeholder="Message">
       <button id="send">Send</button>
     </div>
+
   </div>
 
 </div>
