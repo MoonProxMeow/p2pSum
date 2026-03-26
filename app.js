@@ -6,7 +6,7 @@
 const esc = s => String(s).replace(/[&<>]/g,m=>({ "&":"&amp;","<":"&lt;",">":"&gt;" }[m]));
 
 /* ============================================================
-   MEDIA PROTECTION MANAGER
+   MEDIA PROTECTION MANAGER (FIXED)
 ============================================================ */
 const mediaProtectionManager = (() => {
   let triggered = false;
@@ -31,19 +31,38 @@ const mediaProtectionManager = (() => {
     });
   }
 
-  document.addEventListener("visibilitychange", ()=> {
-    if (document.hidden) trigger();
-    else restore();
+  /* --- SAFE DETECTION --- */
+
+  let lastBlur = 0;
+
+  window.addEventListener("blur", () => {
+    lastBlur = Date.now();
+    trigger();
   });
 
-  window.addEventListener("blur", trigger);
-  window.addEventListener("focus", restore);
+  window.addEventListener("focus", () => {
+    if (Date.now() - lastBlur > 300) {
+      restore();
+    }
+  });
 
-  setInterval(()=>{
-    const t = performance.now();
-    debugger;
-    if (performance.now() - t > 100) trigger();
-  },2000);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      trigger();
+    } else {
+      setTimeout(restore, 300);
+    }
+  });
+
+  /* --- SCREEN SHARE DETECTION --- */
+  if (navigator.mediaDevices?.getDisplayMedia) {
+    const orig = navigator.mediaDevices.getDisplayMedia.bind(navigator.mediaDevices);
+
+    navigator.mediaDevices.getDisplayMedia = async (...args) => {
+      trigger();
+      return orig(...args);
+    };
+  }
 
   return { trigger, restore };
 })();
@@ -62,7 +81,7 @@ const peerManager = (() => {
   });
 
   function connect(pid){
-    if(conns[pid]) return;
+    if(!pid || pid===id || conns[pid]) return;
     const c = peer.connect(pid);
     setup(c);
   }
@@ -84,22 +103,25 @@ const peerManager = (() => {
     Object.values(conns).forEach(c=>c.send(data));
   }
 
-  return { connect, sendAll, id:()=>id };
+  return { connect, sendAll, id:()=>id, peer };
 })();
 
 /* ============================================================
-   MESSAGE MANAGER
+   MESSAGE MANAGER (WITH DELETE SECURITY)
 ============================================================ */
 const messageManager = (() => {
   const seenDeletes = new Set();
 
   function send(text){
+    if(!text.trim()) return;
+
     const msg = {
       type:"msg",
       id:crypto.randomUUID(),
       from:peerManager.id(),
       text
     };
+
     peerManager.sendAll(msg);
     uiController.addMessage(msg,true);
   }
@@ -118,7 +140,7 @@ const messageManager = (() => {
     }
 
     if(data.type==="img"){
-      uiController.addImage(data);
+      uiController.addImage(data,false);
     }
   }
 
@@ -156,27 +178,45 @@ const emojiManager = (() => {
 })();
 
 /* ============================================================
-   CALL MANAGER
+   CALL MANAGER (FIXED)
 ============================================================ */
 const callManager = (() => {
   let localStream=null;
   const calls={};
 
   async function start(){
+    if(localStream) return;
+
     localStream = await navigator.mediaDevices.getUserMedia({audio:true,video:true});
-    Object.keys(peerManager).forEach(p=>callPeer(p));
+
     addVideo(localStream,true);
+
+    Object.keys(peerManager.peer.connections).forEach(pid=>{
+      callPeer(pid);
+    });
   }
 
   function callPeer(pid){
-    const call = peerManager.peer?.call(pid,localStream);
+    if(!localStream) return;
+
+    const call = peerManager.peer.call(pid,localStream);
     if(!call) return;
+
     setup(call);
   }
 
   function receive(call){
-    call.answer(localStream);
-    setup(call);
+    if(!localStream){
+      navigator.mediaDevices.getUserMedia({audio:true,video:true}).then(stream=>{
+        localStream = stream;
+        addVideo(localStream,true);
+        call.answer(stream);
+        setup(call);
+      });
+    } else {
+      call.answer(localStream);
+      setup(call);
+    }
   }
 
   function setup(call){
@@ -186,41 +226,58 @@ const callManager = (() => {
       addVideo(s,false);
     });
 
-    call.on("close",()=>removeVideo(call.peer));
+    call.on("close",()=>{
+      delete calls[call.peer];
+      renderVideos();
+    });
   }
 
   function leave(){
     Object.values(calls).forEach(c=>c.close());
-    calls.clear;
+    Object.keys(calls).forEach(k=>delete calls[k]);
+
     localStream?.getTracks().forEach(t=>t.stop());
+    localStream=null;
+
+    renderVideos();
+  }
+
+  function renderVideos(){
+    document.getElementById("video-grid").innerHTML="";
+    if(localStream) addVideo(localStream,true);
   }
 
   function addVideo(stream,self){
     const v=document.createElement("video");
     v.srcObject=stream;
     v.autoplay=true;
-    document.getElementById("video-grid").appendChild(v);
-  }
+    v.playsInline=true;
+    if(self) v.muted=true;
 
-  function removeVideo(pid){
-    document.getElementById("video-grid").innerHTML="";
+    document.getElementById("video-grid").appendChild(v);
   }
 
   return { start, leave, receive };
 })();
 
 /* ============================================================
-   DM MANAGER (with images)
+   DM MANAGER (IMAGES)
 ============================================================ */
 const dmManager = (() => {
   function sendImage(file){
+    if(!file) return;
+
     const reader=new FileReader();
     reader.onload=()=>{
-      peerManager.sendAll({
+      const payload = {
         type:"img",
+        id:crypto.randomUUID(),
+        from:peerManager.id(),
         data:reader.result
-      });
-      uiController.addImage({data:reader.result},true);
+      };
+
+      peerManager.sendAll(payload);
+      uiController.addImage(payload,true);
     };
     reader.readAsDataURL(file);
   }
@@ -246,6 +303,7 @@ const uiController = (() => {
     };
 
     messages.appendChild(el);
+    messages.scrollTop = messages.scrollHeight;
   }
 
   function deleteMessage(id){
@@ -266,6 +324,7 @@ const uiController = (() => {
     };
 
     messages.appendChild(el);
+    messages.scrollTop = messages.scrollHeight;
   }
 
   return { addMessage, deleteMessage, addImage };
