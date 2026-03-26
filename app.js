@@ -1,360 +1,236 @@
 "use strict";
 
-/* ============================================================
-   UTIL
-============================================================ */
-const esc = s => String(s).replace(/[&<>]/g, m => ({
-  "&":"&amp;", "<":"&lt;", ">":"&gt;"
-}[m]));
+/* =========================
+   STATE
+========================= */
+const state = {
+  peer: null,
+  id: null,
+  conns: {},
+  calls: {},
+  localStream: null
+};
 
-/* ============================================================
-   MEDIA PROTECTION MANAGER (STABLE)
-============================================================ */
-const mediaProtectionManager = (() => {
-  let active = false;
-  const overlay = document.getElementById("drm-overlay");
+/* =========================
+   INIT PEER
+========================= */
+function initPeer() {
+  state.peer = new Peer();
 
-  function set(state) {
-    active = state;
-    overlay.classList.toggle("hidden", !state);
+  state.peer.on("open", id => {
+    state.id = id;
+    document.getElementById("my-id").textContent = id;
+  });
 
-    document.querySelectorAll("video").forEach(v=>{
-      v.style.filter = state ? "brightness(0)" : "";
-    });
+  state.peer.on("connection", conn => {
+    setupConn(conn);
+  });
+
+  state.peer.on("call", call => {
+    handleIncomingCall(call);
+  });
+}
+
+/* =========================
+   CONNECTIONS
+========================= */
+function connectToPeer(id) {
+  if (!id || id === state.id || state.conns[id]) return;
+
+  const conn = state.peer.connect(id);
+  setupConn(conn);
+}
+
+function setupConn(conn) {
+  state.conns[conn.peer] = conn;
+
+  conn.on("data", data => handleData(conn.peer, data));
+
+  conn.on("close", () => {
+    delete state.conns[conn.peer];
+  });
+}
+
+function broadcast(data) {
+  Object.values(state.conns).forEach(c => c.send(data));
+}
+
+/* =========================
+   MESSAGES
+========================= */
+function sendMessage(text) {
+  if (!text.trim()) return;
+
+  const msg = {
+    type: "msg",
+    id: crypto.randomUUID(),
+    from: state.id,
+    text
+  };
+
+  broadcast(msg);
+  renderMessage(msg, true);
+}
+
+function handleData(from, data) {
+  if (!data || typeof data !== "object") return;
+
+  if (data.type === "msg") {
+    renderMessage(data, false);
   }
 
-  let blurCount = 0;
-  let lastBlur = 0;
+  if (data.type === "img") {
+    renderImage(data);
+  }
+}
 
-  window.addEventListener("blur", () => {
-    const now = Date.now();
-    blurCount = (now - lastBlur < 400) ? blurCount + 1 : 1;
-    lastBlur = now;
+/* =========================
+   UI RENDER
+========================= */
+const messagesEl = document.getElementById("messages");
 
-    if (blurCount >= 3) set(true);
-  });
+function renderMessage(msg, self) {
+  const el = document.createElement("div");
+  el.innerHTML = `<b>${self ? "Me" : msg.from}</b>: ${escapeHTML(msg.text)}`;
+  messagesEl.appendChild(el);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
 
-  window.addEventListener("focus", () => {
-    setTimeout(() => {
-      blurCount = 0;
-      set(false);
-    }, 500);
-  });
+function renderImage(msg) {
+  const img = document.createElement("img");
+  img.src = msg.data;
+  img.style.maxWidth = "200px";
 
-  document.addEventListener("visibilitychange", () => {
-    if (document.hidden && blurCount >= 2) set(true);
-  });
+  img.onclick = () => {
+    document.getElementById("lightbox-img").src = msg.data;
+    document.getElementById("lightbox").classList.remove("hidden");
+  };
 
-  // screen share hook
-  if (navigator.mediaDevices?.getDisplayMedia) {
-    const orig = navigator.mediaDevices.getDisplayMedia.bind(navigator.mediaDevices);
-    navigator.mediaDevices.getDisplayMedia = async (...args) => {
-      set(true);
-      return orig(...args);
+  messagesEl.appendChild(img);
+}
+
+/* =========================
+   IMAGE SEND
+========================= */
+function sendImage(file) {
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    const payload = {
+      type: "img",
+      data: reader.result
     };
+
+    broadcast(payload);
+    renderImage(payload);
+  };
+
+  reader.readAsDataURL(file);
+}
+
+/* =========================
+   CALL SYSTEM (STABLE)
+========================= */
+const videoGrid = document.getElementById("video-grid");
+
+async function startCall() {
+  if (state.localStream) return;
+
+  try {
+    state.localStream = await navigator.mediaDevices.getUserMedia({
+      video: true,
+      audio: true
+    });
+  } catch (e) {
+    alert("Camera/mic blocked");
+    return;
   }
 
-  return { trigger:()=>set(true), restore:()=>set(false) };
-})();
+  addVideo(state.localStream, true);
 
-/* ============================================================
-   PEER MANAGER
-============================================================ */
-const peerManager = (() => {
-  const peer = new Peer();
-  const conns = {};
-  let id;
-
-  peer.on("open", i => {
-    id = i;
-    document.getElementById("my-id").textContent = i;
+  Object.keys(state.conns).forEach(pid => {
+    const call = state.peer.call(pid, state.localStream);
+    setupCall(call);
   });
+}
 
-  function connect(pid){
-    if (!pid || pid===id || conns[pid]) return;
-    const conn = peer.connect(pid);
-    setup(conn);
-  }
-
-  function setup(conn){
-    conns[conn.peer] = conn;
-
-    conn.on("data", data => {
-      messageManager.handle(conn.peer, data);
-    });
-
-    conn.on("close", () => delete conns[conn.peer]);
-  }
-
-  peer.on("connection", setup);
-  peer.on("call", callManager.receive);
-
-  function broadcast(data){
-    Object.values(conns).forEach(c => c.send(data));
-  }
-
-  function getPeers(){
-    return Object.keys(conns);
-  }
-
-  return { connect, broadcast, getPeers, id:()=>id, peer };
-})();
-
-/* ============================================================
-   MESSAGE MANAGER
-============================================================ */
-const messageManager = (() => {
-  const seenDeletes = new Set();
-
-  function send(text){
-    if (!text.trim()) return;
-
-    const msg = {
-      type:"msg",
-      id:crypto.randomUUID(),
-      from:peerManager.id(),
-      text
-    };
-
-    peerManager.broadcast(msg);
-    uiController.addMessage(msg, true);
-  }
-
-  function handle(from, data){
-    if (!data || typeof data !== "object") return;
-
-    if (data.type === "msg") {
-      uiController.addMessage(data, false);
-    }
-
-    if (data.type === "delete") {
-      if (seenDeletes.has(data.id)) return;
-      seenDeletes.add(data.id);
-      uiController.deleteMessage(data.id);
-    }
-
-    if (data.type === "img") {
-      uiController.addImage(data, false);
-    }
-  }
-
-  function requestDelete(msg){
-    if (msg.from !== peerManager.id()) return;
-
-    peerManager.broadcast({ type:"delete", id:msg.id });
-    uiController.deleteMessage(msg.id);
-  }
-
-  return { send, handle, requestDelete };
-})();
-
-/* ============================================================
-   EMOJI MANAGER
-============================================================ */
-const emojiManager = (() => {
-  let custom = JSON.parse(localStorage.getItem("emojis") || "{}");
-
-  function save(){
-    localStorage.setItem("emojis", JSON.stringify(custom));
-  }
-
-  function add(name, data){
-    custom[name] = data;
-    save();
-  }
-
-  function parse(text){
-    return text.replace(/:([a-z0-9_]+):/gi, (m,n)=>{
-      if (custom[n]) {
-        return `<img src="${custom[n]}" class="custom-emoji-inline">`;
-      }
-      return m;
-    });
-  }
-
-  return { add, parse, custom };
-})();
-
-/* ============================================================
-   CALL MANAGER (FULL FIX)
-============================================================ */
-const callManager = (() => {
-  let localStream = null;
-  const calls = {};
-  const videoGrid = document.getElementById("video-grid");
-
-  async function start(){
-    if (localStream) return;
-
-    try {
-      localStream = await navigator.mediaDevices.getUserMedia({
-        audio:true,
-        video:true
+function handleIncomingCall(call) {
+  if (!state.localStream) {
+    navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+      .then(stream => {
+        state.localStream = stream;
+        addVideo(stream, true);
+        call.answer(stream);
+        setupCall(call);
       });
-    } catch {
-      alert("Camera/Mic required");
-      return;
-    }
+  } else {
+    call.answer(state.localStream);
+    setupCall(call);
+  }
+}
 
-    render();
+function setupCall(call) {
+  state.calls[call.peer] = call;
 
-    peerManager.getPeers().forEach(pid => callPeer(pid));
+  call.on("stream", stream => {
+    addVideo(stream);
+  });
+
+  call.on("close", () => {
+    delete state.calls[call.peer];
+    renderVideos();
+  });
+}
+
+function leaveCall() {
+  Object.values(state.calls).forEach(c => c.close());
+  state.calls = {};
+
+  if (state.localStream) {
+    state.localStream.getTracks().forEach(t => t.stop());
+    state.localStream = null;
   }
 
-  function callPeer(pid){
-    if (!localStream) return;
+  renderVideos();
+}
 
-    const call = peerManager.peer.call(pid, localStream);
-    if (!call) return;
+function renderVideos() {
+  videoGrid.innerHTML = "";
+}
 
-    setup(call);
-  }
+function addVideo(stream, self = false) {
+  const v = document.createElement("video");
+  v.srcObject = stream;
+  v.autoplay = true;
+  v.playsInline = true;
+  if (self) v.muted = true;
 
-  function receive(call){
-    if (!localStream) {
-      navigator.mediaDevices.getUserMedia({audio:true,video:true})
-        .then(stream=>{
-          localStream = stream;
-          render();
-          call.answer(stream);
-          setup(call);
-        });
-    } else {
-      call.answer(localStream);
-      setup(call);
-    }
-  }
+  videoGrid.appendChild(v);
+}
 
-  function setup(call){
-    calls[call.peer] = call;
+/* =========================
+   UTILS
+========================= */
+function escapeHTML(str) {
+  return str.replace(/[&<>]/g, c => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;"
+  })[c]);
+}
 
-    call.on("stream", stream=>{
-      call._stream = stream;
-      render();
-    });
-
-    call.on("close", ()=>{
-      delete calls[call.peer];
-      render();
-    });
-  }
-
-  function leave(){
-    Object.values(calls).forEach(c => c.close());
-    Object.keys(calls).forEach(k => delete calls[k]);
-
-    if (localStream) {
-      localStream.getTracks().forEach(t => t.stop());
-      localStream = null;
-    }
-
-    render();
-  }
-
-  function render(){
-    videoGrid.innerHTML = "";
-
-    if (localStream) {
-      addVideo(localStream, true);
-    }
-
-    Object.values(calls).forEach(call=>{
-      if (call._stream) addVideo(call._stream);
-    });
-  }
-
-  function addVideo(stream, self=false){
-    const v = document.createElement("video");
-    v.srcObject = stream;
-    v.autoplay = true;
-    v.playsInline = true;
-    if (self) v.muted = true;
-
-    videoGrid.appendChild(v);
-  }
-
-  return { start, leave, receive };
-})();
-
-/* ============================================================
-   DM MANAGER (IMAGES)
-============================================================ */
-const dmManager = (() => {
-  function sendImage(file){
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = () => {
-      const payload = {
-        type:"img",
-        id:crypto.randomUUID(),
-        from:peerManager.id(),
-        data:reader.result
-      };
-
-      peerManager.broadcast(payload);
-      uiController.addImage(payload, true);
-    };
-    reader.readAsDataURL(file);
-  }
-
-  return { sendImage };
-})();
-
-/* ============================================================
-   UI CONTROLLER
-============================================================ */
-const uiController = (() => {
-  const messages = document.getElementById("messages");
-
-  function addMessage(msg, self){
-    const el = document.createElement("div");
-    el.dataset.id = msg.id;
-
-    el.innerHTML = `<b>${self ? "Me" : esc(msg.from)}</b>: ${emojiManager.parse(esc(msg.text))}`;
-
-    el.oncontextmenu = e => {
-      e.preventDefault();
-      messageManager.requestDelete(msg);
-    };
-
-    messages.appendChild(el);
-    messages.scrollTop = messages.scrollHeight;
-  }
-
-  function deleteMessage(id){
-    const el = document.querySelector(`[data-id="${id}"]`);
-    if (el) el.textContent = "Message deleted";
-  }
-
-  function addImage(msg){
-    const img = document.createElement("img");
-    img.src = msg.data;
-    img.className = "msg-img";
-
-    img.onclick = () => {
-      document.getElementById("lightbox-img").src = msg.data;
-      document.getElementById("lightbox").classList.remove("hidden");
-    };
-
-    messages.appendChild(img);
-    messages.scrollTop = messages.scrollHeight;
-  }
-
-  return { addMessage, deleteMessage, addImage };
-})();
-
-/* ============================================================
+/* =========================
    EVENTS
-============================================================ */
+========================= */
 document.getElementById("send-btn").onclick = () => {
   const input = document.getElementById("msg-input");
-  messageManager.send(input.value);
+  sendMessage(input.value);
   input.value = "";
 };
 
 document.getElementById("connect-btn").onclick = () => {
-  peerManager.connect(document.getElementById("peer-id-input").value);
+  connectToPeer(document.getElementById("peer-id-input").value);
 };
 
 document.getElementById("img-btn").onclick = () => {
@@ -362,12 +238,17 @@ document.getElementById("img-btn").onclick = () => {
 };
 
 document.getElementById("img-input").onchange = e => {
-  dmManager.sendImage(e.target.files[0]);
+  sendImage(e.target.files[0]);
 };
 
-document.getElementById("join-call").onclick = () => callManager.start();
-document.getElementById("leave-call").onclick = () => callManager.leave();
+document.getElementById("join-call").onclick = startCall;
+document.getElementById("leave-call").onclick = leaveCall;
 
 document.getElementById("lightbox").onclick = () => {
   document.getElementById("lightbox").classList.add("hidden");
 };
+
+/* =========================
+   START
+========================= */
+initPeer();
