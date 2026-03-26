@@ -4,90 +4,180 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NexTalk</title>
-
-<link href="https://fonts.googleapis.com/css2?family=DM+Mono&family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,400;0,500;1,400&family=Outfit:wght@300;400;500;600;700;900&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
-
-<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 </head>
-
 <body>
 
-<!-- PROTECTION OVERLAY -->
+<!-- DRM overlay — shown when screen capture detected -->
 <div id="drm-overlay" class="drm-overlay hidden">
   <div class="drm-content">
-    <div class="drm-title">PROTECTED CONTENT</div>
-    <div class="drm-sub">SCREEN CAPTURE DETECTED</div>
+    <div class="drm-icon">⚠</div>
+    <div class="drm-title">Recording Detected</div>
+    <div class="drm-sub">This application has detected a screen capture event.<br>Media has been suspended for privacy.</div>
   </div>
 </div>
 
-<!-- LIGHTBOX -->
+<!-- Lightbox -->
 <div id="lightbox" class="lightbox hidden">
   <div class="lightbox-bg"></div>
-  <img id="lightbox-img">
+  <button class="lightbox-close">✕</button>
+  <img id="lightbox-img" src="" alt="">
 </div>
 
-<!-- EMOJI PICKER -->
+<!-- Emoji picker -->
 <div id="emoji-picker" class="emoji-picker hidden"></div>
 
-<!-- DM -->
+<!-- DM Panel -->
 <div id="dm-panel" class="dm-panel hidden">
   <div class="dm-header">
-    <span id="dm-name"></span>
-    <button id="dm-close">✕</button>
+    <img id="dm-avatar" class="dm-avatar-img" src="" alt="">
+    <span id="dm-name" class="dm-name"></span>
+    <button id="dm-close" class="dm-close-btn">✕</button>
   </div>
-  <div id="dm-messages" class="messages"></div>
+  <div id="dm-messages" class="messages dm-messages"></div>
   <div class="input-bar">
-    <input id="dm-input" placeholder="Message...">
-    <button id="dm-send">Send</button>
+    <input id="dm-input" placeholder="Direct message…" autocomplete="off">
+    <button id="dm-send" class="send-btn">Send</button>
   </div>
 </div>
 
 <div id="app">
 
-<!-- SIDEBAR -->
-<div class="sidebar">
-  <div class="logo">NexTalk</div>
-
-  <div class="id-box">
-    <div id="my-id">connecting...</div>
-    <button id="copy-id">⎘</button>
+  <!-- SERVER/CHANNEL STRIP (left) -->
+  <div class="server-strip">
+    <div class="server-icon active" title="Main Room" id="nav-main">💬</div>
+    <div class="server-divider"></div>
+    <div class="server-icon" title="Account" id="nav-account">👤</div>
   </div>
 
-  <div class="join-row">
-    <input id="peer-id-input" placeholder="Peer ID">
-    <button id="connect-btn">Connect</button>
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">NexTalk</div>
+      <div class="logo-sub">P2P · E2EE · MESH</div>
+    </div>
+
+    <!-- Account panel (hidden by default, toggled) -->
+    <div id="account-panel" class="account-panel hidden">
+      <div class="account-section-label">ACCOUNT</div>
+      <div class="account-profile-row">
+        <label class="avatar-wrap" title="Click to set avatar">
+          <img id="my-avatar" class="my-avatar-img" src="" alt="avatar">
+          <span class="avatar-edit-badge">✎</span>
+          <input type="file" id="avatar-input" accept="image/*" style="display:none">
+        </label>
+        <div style="flex:1">
+          <div class="acc-label">USERNAME</div>
+          <input id="username" class="acc-input" placeholder="Your name…">
+        </div>
+      </div>
+      <div class="account-btns">
+        <button id="acc-save" class="btn btn-primary btn-sm">Save Account</button>
+        <button id="acc-export" class="btn btn-secondary btn-sm">Export JSON</button>
+        <label class="btn btn-secondary btn-sm" style="cursor:pointer">Import JSON<input type="file" id="acc-import" accept=".json" style="display:none"></label>
+      </div>
+    </div>
+
+    <!-- Main panel -->
+    <div id="main-panel">
+      <div class="id-box">
+        <div class="id-label">YOUR NODE ID</div>
+        <div id="my-id" class="id-value">connecting…</div>
+        <button id="copy-id" class="copy-btn" title="Copy ID">⎘</button>
+      </div>
+
+      <div class="my-profile-mini">
+        <label class="avatar-wrap-mini" title="Click to set avatar">
+          <img id="my-avatar-mini" class="my-avatar-mini-img" src="" alt="avatar">
+          <input type="file" id="avatar-input-mini" accept="image/*" style="display:none">
+        </label>
+        <span id="my-username-display" class="my-username-display">Anonymous</span>
+      </div>
+
+      <div class="room-actions">
+        <button id="host" class="btn btn-primary">⊕ Create Room</button>
+        <div class="divider"><span>or join</span></div>
+        <div class="join-row">
+          <input id="host-id" placeholder="Paste peer ID…" class="join-input">
+          <button id="join" class="btn btn-accent">→</button>
+        </div>
+      </div>
+
+      <div class="peers-section">
+        <div class="section-label">MESH PEERS <span id="peer-count" class="peer-count">0</span></div>
+        <div id="peers" class="peers-list"><span class="empty-peers">No peers yet</span></div>
+      </div>
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="enc-badge">🔒 ECDH · AES-256-GCM</div>
+    </div>
   </div>
 
-  <div id="peers"></div>
+  <!-- MAIN AREA -->
+  <div class="chat-area">
+
+    <!-- TOOLBAR -->
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <span class="toolbar-channel"># general</span>
+        <span class="toolbar-desc">End-to-end encrypted · Full mesh P2P</span>
+      </div>
+      <div class="toolbar-right">
+        <button id="join-call" class="vc-btn vc-join"><span>🎙</span> Voice</button>
+        <button id="leave-call" class="vc-btn vc-leave" disabled><span>📵</span> Leave</button>
+        <div class="vc-sep"></div>
+        <button id="btn-camera"  class="icon-btn" disabled><span>📷</span><small>Cam</small></button>
+        <button id="btn-mute"    class="icon-btn" disabled><span>🎙</span><small>Mute</small></button>
+        <button id="btn-deafen"  class="icon-btn" disabled><span>🔊</span><small>Deaf</small></button>
+        <button id="btn-screen"  class="icon-btn" disabled><span>🖥</span><small>Share</small></button>
+        <label  class="icon-btn file-label" title="Send File">
+          <span>📎</span><small>File</small>
+          <input type="file" id="file-input" style="display:none">
+        </label>
+      </div>
+    </div>
+
+    <!-- VIDEO GRID -->
+    <div id="video-grid" class="video-grid hidden"></div>
+
+    <!-- FILE PROGRESS -->
+    <div id="file-progress-bar" class="file-progress-bar hidden">
+      <div class="fp-inner">
+        <span id="fp-label" class="fp-label">Sending…</span>
+        <div class="fp-track"><div id="fp-fill" class="fp-fill"></div></div>
+        <span id="fp-pct" class="fp-pct">0%</span>
+      </div>
+    </div>
+
+    <!-- MESSAGES -->
+    <div id="messages" class="messages"></div>
+
+    <!-- INPUT BAR -->
+    <div class="input-bar">
+      <button id="emoji-btn" class="emoji-trigger" title="Emoji">😊</button>
+      <div class="input-wrap">
+        <input id="message" placeholder="Message #general…" autocomplete="off">
+      </div>
+      <label class="icon-btn file-label-inline" title="Attach file">
+        <span>📎</span>
+        <input type="file" id="file-input-chat" style="display:none">
+      </label>
+      <button id="send" class="send-btn">↑</button>
+    </div>
+
+  </div>
 </div>
 
-<!-- MAIN -->
-<div class="chat-area">
+<div id="toast" class="toast hidden"></div>
 
-  <div class="toolbar">
-    <button id="join-call">Join</button>
-    <button id="leave-call" disabled>Leave</button>
-    <button id="btn-camera" disabled>Cam</button>
-    <button id="btn-mute" disabled>Mute</button>
-    <button id="btn-screen" disabled>Screen</button>
-  </div>
+<!-- © watermark (invisible) -->
+<span style="position:fixed;opacity:0;pointer-events:none;user-select:none;font-size:0" aria-hidden="true">©NexTalk-P2P-2025</span>
 
-  <div id="messages" class="messages"></div>
-
-  <div class="input-bar">
-    <input id="msg-input" placeholder="Message...">
-    <button id="emoji-btn">😊</button>
-    <input type="file" id="img-input" accept="image/*" hidden>
-    <button id="img-btn">📷</button>
-    <button id="send-btn">Send</button>
-  </div>
-
-  <div id="video-grid" class="video-grid"></div>
-
-</div>
-</div>
-
+<script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
