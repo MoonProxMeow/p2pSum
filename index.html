@@ -11,7 +11,7 @@
 </head>
 <body>
 
-<!-- DRM overlay — shown when screen capture detected -->
+<!-- DRM overlay -->
 <div id="drm-overlay" class="drm-overlay hidden">
   <div class="drm-content">
     <div class="drm-icon">⚠</div>
@@ -30,6 +30,23 @@
 <!-- Emoji picker -->
 <div id="emoji-picker" class="emoji-picker hidden"></div>
 
+<!-- Profile popup -->
+<div id="profile-popup" class="profile-popup hidden">
+  <button class="profile-popup-close">✕</button>
+  <div class="profile-popup-inner">
+    <img id="pp-avatar" class="pp-avatar" src="" alt="">
+    <div class="pp-info">
+      <div id="pp-name" class="pp-name"></div>
+      <div id="pp-id" class="pp-id"></div>
+      <div id="pp-friend-status" class="pp-friend-status"></div>
+    </div>
+    <div class="pp-actions">
+      <button id="pp-dm" class="btn btn-primary btn-sm">💬 DM</button>
+      <button id="pp-add-friend" class="btn btn-secondary btn-sm">➕ Add Friend</button>
+    </div>
+  </div>
+</div>
+
 <!-- DM Panel -->
 <div id="dm-panel" class="dm-panel hidden">
   <div class="dm-header">
@@ -39,18 +56,65 @@
   </div>
   <div id="dm-messages" class="messages dm-messages"></div>
   <div class="input-bar">
+    <label class="file-label-inline" title="Send image">
+      <span>🖼</span>
+      <input type="file" id="dm-img-input" accept="image/*" style="display:none">
+    </label>
     <input id="dm-input" placeholder="Direct message…" autocomplete="off">
-    <button id="dm-send" class="send-btn">Send</button>
+    <button id="dm-send" class="send-btn">↑</button>
   </div>
 </div>
 
-<div id="app">
+<!-- Settings Panel -->
+<div id="settings-panel" class="settings-panel hidden">
+  <div class="settings-header">
+    <span class="settings-title">⚙ Settings</span>
+    <button id="settings-close" class="dm-close-btn">✕</button>
+  </div>
+  <div class="settings-body" id="settings-body"></div>
+</div>
 
-  <!-- SERVER/CHANNEL STRIP (left) -->
+<!-- File send confirm dialog -->
+<div id="file-confirm-dialog" class="perm-dialog-overlay hidden">
+  <div class="perm-dialog">
+    <div class="perm-icon">📤</div>
+    <div class="perm-title">Send File</div>
+    <div id="fcd-filename" class="perm-msg"></div>
+    <div id="fcd-preview" style="margin:8px 0"></div>
+    <div class="fcd-toggles">
+      <label class="toggle-row"><input type="checkbox" id="fcd-onetime"> One-time view (no download)</label>
+      <label class="toggle-row"><input type="checkbox" id="fcd-spoiler"> Spoiler (hidden until clicked)</label>
+      <div class="toggle-row">
+        <span>Expiry:</span>
+        <select id="fcd-expiry" class="fcd-select">
+          <option value="0">Never</option>
+          <option value="30">30 seconds</option>
+          <option value="300">5 minutes</option>
+          <option value="3600">1 hour</option>
+          <option value="86400">24 hours</option>
+        </select>
+      </div>
+    </div>
+    <div class="perm-btns">
+      <button id="fcd-send" class="btn btn-primary btn-sm">Send</button>
+      <button id="fcd-cancel" class="btn btn-secondary btn-sm">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Push-to-talk overlay indicator -->
+<div id="ptt-indicator" class="ptt-indicator hidden">🎙 Transmitting…</div>
+
+<div id="app">
+  <!-- SERVER STRIP -->
   <div class="server-strip">
-    <div class="server-icon active" title="Main Room" id="nav-main">💬</div>
+    <div class="server-icon active" title="Chat" id="nav-main">💬</div>
     <div class="server-divider"></div>
+    <div class="server-icon" title="Friends" id="nav-friends">👥</div>
     <div class="server-icon" title="Account" id="nav-account">👤</div>
+    <div class="server-icon" title="Settings" id="nav-settings">⚙</div>
+    <div class="server-divider"></div>
+    <div class="server-icon emergency-btn" title="Emergency Disconnect" id="emergency-disconnect">☠</div>
   </div>
 
   <!-- SIDEBAR -->
@@ -60,7 +124,7 @@
       <div class="logo-sub">P2P · E2EE · MESH</div>
     </div>
 
-    <!-- Account panel (hidden by default, toggled) -->
+    <!-- Account panel -->
     <div id="account-panel" class="account-panel hidden">
       <div class="account-section-label">ACCOUNT</div>
       <div class="account-profile-row">
@@ -78,6 +142,29 @@
         <button id="acc-save" class="btn btn-primary btn-sm">Save Account</button>
         <button id="acc-export" class="btn btn-secondary btn-sm">Export JSON</button>
         <label class="btn btn-secondary btn-sm" style="cursor:pointer">Import JSON<input type="file" id="acc-import" accept=".json" style="display:none"></label>
+        <button id="acc-burn" class="btn btn-sm" style="background:var(--accent-red);color:#fff">🔥 Burn Account</button>
+      </div>
+    </div>
+
+    <!-- Friends panel -->
+    <div id="friends-panel" class="account-panel hidden">
+      <div class="account-section-label">FRIENDS</div>
+      <div class="friends-key-box">
+        <div class="acc-label">YOUR FRIEND KEY</div>
+        <div id="friend-key-display" class="friend-key-display">—</div>
+        <button id="refresh-friend-key" class="btn btn-secondary btn-sm" style="margin-top:6px">↻ Refresh Key</button>
+        <button id="copy-friend-key" class="btn btn-secondary btn-sm" style="margin-top:4px">⎘ Copy Key</button>
+      </div>
+      <div style="margin-top:8px">
+        <div class="acc-label">ADD FRIEND BY KEY</div>
+        <div class="join-row">
+          <input id="add-friend-input" class="join-input" placeholder="Paste friend key…">
+          <button id="add-friend-btn" class="btn btn-accent">+</button>
+        </div>
+      </div>
+      <div style="margin-top:10px">
+        <div class="account-section-label">SAVED FRIENDS</div>
+        <div id="friends-list" class="peers-list" style="margin-top:6px"></div>
       </div>
     </div>
 
@@ -88,7 +175,6 @@
         <div id="my-id" class="id-value">connecting…</div>
         <button id="copy-id" class="copy-btn" title="Copy ID">⎘</button>
       </div>
-
       <div class="my-profile-mini">
         <label class="avatar-wrap-mini" title="Click to set avatar">
           <img id="my-avatar-mini" class="my-avatar-mini-img" src="" alt="avatar">
@@ -96,7 +182,6 @@
         </label>
         <span id="my-username-display" class="my-username-display">Anonymous</span>
       </div>
-
       <div class="room-actions">
         <button id="host" class="btn btn-primary">⊕ Create Room</button>
         <div class="divider"><span>or join</span></div>
@@ -105,7 +190,6 @@
           <button id="join" class="btn btn-accent">→</button>
         </div>
       </div>
-
       <div class="peers-section">
         <div class="section-label">MESH PEERS <span id="peer-count" class="peer-count">0</span></div>
         <div id="peers" class="peers-list"><span class="empty-peers">No peers yet</span></div>
@@ -113,26 +197,26 @@
     </div>
 
     <div class="sidebar-footer">
-      <div class="enc-badge">🔒 ECDH · AES-256-GCM</div>
+      <div class="enc-badge">🔒 ECDH · AES-256-GCM · Ratchet</div>
     </div>
   </div>
 
   <!-- MAIN AREA -->
   <div class="chat-area">
-
-    <!-- TOOLBAR -->
     <div class="toolbar">
       <div class="toolbar-left">
         <span class="toolbar-channel"># general</span>
-        <span class="toolbar-desc">End-to-end encrypted · Full mesh P2P</span>
+        <span class="toolbar-desc">End-to-end encrypted · Full mesh · Per-message ratchet</span>
       </div>
       <div class="toolbar-right">
+        <button id="ptt-btn" class="icon-btn ptt-btn" disabled title="Push-to-talk (hold Space)"><span>📢</span><small>PTT</small></button>
         <button id="join-call" class="vc-btn vc-join"><span>🎙</span> Voice</button>
         <button id="leave-call" class="vc-btn vc-leave" disabled><span>📵</span> Leave</button>
         <div class="vc-sep"></div>
         <button id="btn-camera"  class="icon-btn" disabled><span>📷</span><small>Cam</small></button>
         <button id="btn-mute"    class="icon-btn" disabled><span>🎙</span><small>Mute</small></button>
         <button id="btn-deafen"  class="icon-btn" disabled><span>🔊</span><small>Deaf</small></button>
+        <button id="btn-noise"   class="icon-btn" disabled title="Voice isolation"><span>🎛</span><small>Noise</small></button>
         <button id="btn-screen"  class="icon-btn" disabled><span>🖥</span><small>Share</small></button>
         <label  class="icon-btn file-label" title="Send File">
           <span>📎</span><small>File</small>
@@ -141,10 +225,8 @@
       </div>
     </div>
 
-    <!-- VIDEO GRID -->
     <div id="video-grid" class="video-grid hidden"></div>
 
-    <!-- FILE PROGRESS -->
     <div id="file-progress-bar" class="file-progress-bar hidden">
       <div class="fp-inner">
         <span id="fp-label" class="fp-label">Sending…</span>
@@ -153,28 +235,24 @@
       </div>
     </div>
 
-    <!-- MESSAGES -->
     <div id="messages" class="messages"></div>
 
-    <!-- INPUT BAR -->
     <div class="input-bar">
       <button id="emoji-btn" class="emoji-trigger" title="Emoji">😊</button>
       <div class="input-wrap">
         <input id="message" placeholder="Message #general…" autocomplete="off">
       </div>
-      <label class="icon-btn file-label-inline" title="Attach file">
+      <label class="file-label-inline" title="Attach file">
         <span>📎</span>
         <input type="file" id="file-input-chat" style="display:none">
       </label>
       <button id="send" class="send-btn">↑</button>
     </div>
-
   </div>
 </div>
 
 <div id="toast" class="toast hidden"></div>
 
-<!-- © watermark (invisible) -->
 <span style="position:fixed;opacity:0;pointer-events:none;user-select:none;font-size:0" aria-hidden="true">©NexTalk-P2P-2025</span>
 
 <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js"></script>
