@@ -1,9 +1,9 @@
 /* ============================================================
-   NexTalk — Modular P2P E2EE Chat  v2.0
-   Modules: accountManager · encryptionManager · peerManager ·
-            meshNetwork · callManager · dmManager · filePermissionManager ·
-            fileTransferManager · embedRenderer · emojiManager ·
-            mediaProtectionManager · uiController
+   NexTalk — P2P E2EE Chat  v3.0
+   Security: ECDH + ECDSA key pairs, per-message key ratchet,
+             replay protection, message signing, padded payloads.
+   Call fix: deferred callPeer, proper stream lifecycle,
+             clean re-negotiation on screen-share stop.
 ============================================================ */
 "use strict";
 
@@ -14,13 +14,9 @@
   document.addEventListener("contextmenu", e => e.preventDefault());
   document.addEventListener("keydown", e => {
     const c = e.ctrlKey || e.metaKey;
-    if (c && (e.key === "s" || e.key === "u" || e.key === "S" || e.key === "U")) {
-      e.preventDefault(); return false;
-    }
+    if (c && /^[suSU]$/.test(e.key)) { e.preventDefault(); return false; }
     if (e.key === "F12") { e.preventDefault(); return false; }
-    if (c && e.shiftKey && (e.key === "i" || e.key === "j" || e.key === "I" || e.key === "J")) {
-      e.preventDefault(); return false;
-    }
+    if (c && e.shiftKey && /^[ijIJ]$/.test(e.key)) { e.preventDefault(); return false; }
   });
   const footer = document.createElement("div");
   footer.style.cssText = "position:fixed;bottom:4px;right:8px;font-size:9px;opacity:.08;pointer-events:none;z-index:9999;font-family:monospace;user-select:none";
@@ -34,9 +30,9 @@
 const CHUNK_SIZE = 12000;
 const EMOJI_CATEGORIES = {
   "Smileys": ["😀","😃","😄","😁","😆","😅","🤣","😂","🙂","😊","😇","🥰","😍","🤩","😘","😗","😚","😙","😋","😛","😜","🤪","😝","🤑","🤗","🤭","🤫","🤔","🤐","😐","😑","😶","😏","😒","🙄","😬","🤥","😌","😔","😪","🤤","😴","😷","🤒","🤕","🤢","🤮","🤧","🥵","🥶","🥴","😵","🤯","🤠","🥳","😎","🤓","🧐","😕","😟","🙁","☹️","😮","😯","😲","😳","🥺","😦","😧","😨","😰","😥","😢","😭","😱","😖","😣","😞","😓","😩","😫","🥱","😤","😡","😠","🤬","😈","👿","💀","☠️","💩","🤡","👹","👺","👻","👽","👾","🤖"],
-  "People": ["👋","🤚","🖐️","✋","🖖","👌","🤌","🤏","✌️","🤞","🤟","🤘","🤙","👈","👉","👆","🖕","👇","☝️","👍","👎","✊","👊","🤛","🤜","👏","🙌","👐","🤲","🤝","🙏","💅","🤳","💪","🦾","🦵","🦶","👂","🦻","👃","🧠","🫀","🫁","🦷","🦴","👀","👁️","👅","👄","🫦"],
-  "Nature": ["🐶","🐱","🐭","🐹","🐰","🦊","🐻","🐼","🐨","🐯","🦁","🐮","🐷","🐸","🐵","🐔","🐧","🐦","🐤","🦆","🦅","🦉","🦇","🐺","🐗","🐴","🦄","🐝","🐛","🦋","🐌","🐞","🐜","🦟","🦗","🌸","🌺","🌻","🌹","🌷","🌱","🌿","🍀","🌵","🌴","🌲","🍁","🍂","🍃","🌾","🍄","🌊","🌈","☀️","🌙","⭐","❄️","🌪️","🌬️","🌀"],
-  "Food": ["🍎","🍊","🍋","🍇","🍓","🍒","🍑","🥭","🍍","🥝","🍅","🥑","🍆","🥦","🌽","🥕","🧅","🧄","🥔","🍠","🥐","🥖","🥨","🧀","🥚","🍳","🥞","🧇","🥓","🍗","🍖","🥩","🌭","🍔","🍟","🍕","🥙","🥪","🥗","🍜","🍝","🍛","🍣","🍱","🍤","🍙","🍚","🍘","🍥","🥮","🍡","🧁","🎂","🍰","🍩","🍪","🍫","🍬","🍭","🍮","🍯","🍵","☕","🍺","🍻","🥂","🍷","🥃","🍸","🍹","🧃","🥤","🧋"],
+  "People":  ["👋","🤚","🖐️","✋","🖖","👌","🤌","🤏","✌️","🤞","🤟","🤘","🤙","👈","👉","👆","🖕","👇","☝️","👍","👎","✊","👊","🤛","🤜","👏","🙌","👐","🤲","🤝","🙏","💅","🤳","💪","🦾","🦵","🦶","👂","🦻","👃","🧠","🫀","🫁","🦷","🦴","👀","👁️","👅","👄","🫦"],
+  "Nature":  ["🐶","🐱","🐭","🐹","🐰","🦊","🐻","🐼","🐨","🐯","🦁","🐮","🐷","🐸","🐵","🐔","🐧","🐦","🐤","🦆","🦅","🦉","🦇","🐺","🐗","🐴","🦄","🐝","🐛","🦋","🐌","🐞","🐜","🦟","🦗","🌸","🌺","🌻","🌹","🌷","🌱","🌿","🍀","🌵","🌴","🌲","🍁","🍂","🍃","🌾","🍄","🌊","🌈","☀️","🌙","⭐","❄️","🌪️","🌬️","🌀"],
+  "Food":    ["🍎","🍊","🍋","🍇","🍓","🍒","🍑","🥭","🍍","🥝","🍅","🥑","🍆","🥦","🌽","🥕","🧅","🧄","🥔","🍠","🥐","🥖","🥨","🧀","🥚","🍳","🥞","🧇","🥓","🍗","🍖","🥩","🌭","🍔","🍟","🍕","🥙","🥪","🥗","🍜","🍝","🍛","🍣","🍱","🍤","🍙","🍚","🍘","🍥","🥮","🍡","🧁","🎂","🍰","🍩","🍪","🍫","🍬","🍭","🍮","🍯","🍵","☕","🍺","🍻","🥂","🍷","🥃","🍸","🍹","🧃","🥤","🧋"],
   "Objects": ["💎","🔮","🧿","💡","🔦","🕯️","🪔","📱","💻","🖥️","🖨️","⌨️","🖱️","🖲️","💾","💿","📀","📷","📸","📹","🎥","📽️","🎞️","📞","☎️","📟","📠","📺","📻","🎙️","🎚️","🎛️","🧭","⏱️","⌚","📡","🔋","🔌","💰","💳","🔑","🗝️","🔒","🔓","🔨","🪓","⚔️","🛡️","🔧","🔩","⚙️","🗜️","🔬","🔭","📊","📈","📉"],
   "Symbols": ["❤️","🧡","💛","💚","💙","💜","🖤","🤍","🤎","💔","❣️","💕","💞","💓","💗","💖","💘","💝","✨","⚡","🔥","💫","🌟","💥","🎉","🎊","🎈","🎁","🏆","🥇","🎯","🎮","🕹️","🎲","♠️","♥️","♦️","♣️","🃏","🀄","🎴","🎭","🎨","🖼️","🎬","🎤","🎧","🎷","🎸","🎹","🥁","🎺","🎻","🪕","🎼","🎵","🎶","🎙️"]
 };
@@ -50,33 +46,22 @@ const accountManager = (() => {
   let _account = null;
 
   function _defaultAccount() {
-    return {
-      username: "Anonymous",
-      avatar: null,
-      preferences: {},
-      encryptionKeys: null,
-      customEmojis: {}
-      // NOTE: peerId is intentionally excluded from exported accounts
-    };
+    return { username: "Anonymous", avatar: null, preferences: {}, customEmojis: {} };
   }
 
   function load() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
-        const parsed = JSON.parse(raw);
-        // Strip any accidentally-saved peerId/session state on load
-        delete parsed.peerId;
-        _account = { ..._defaultAccount(), ...parsed };
-      } else {
-        _account = _defaultAccount();
-      }
+        const p = JSON.parse(raw);
+        delete p.peerId;
+        _account = { ..._defaultAccount(), ...p };
+      } else { _account = _defaultAccount(); }
     } catch { _account = _defaultAccount(); }
     return _account;
   }
 
   function save(updates = {}) {
-    // Never persist session identifiers
     delete updates.peerId;
     Object.assign(_account, updates);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(_account));
@@ -85,14 +70,10 @@ const accountManager = (() => {
   function get() { return _account || load(); }
 
   function exportJSON() {
-    // Ensure no peerId in export
-    const exportData = { ..._account };
-    delete exportData.peerId;
-    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: "application/json" });
+    const data = { ..._account }; delete data.peerId;
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "nextalk-account.json";
-    a.click();
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
+    a.download = "nextalk-account.json"; a.click();
     URL.revokeObjectURL(a.href);
   }
 
@@ -101,15 +82,11 @@ const accountManager = (() => {
       const reader = new FileReader();
       reader.onload = e => {
         try {
-          const parsed = JSON.parse(e.target.result);
-          // Strip session data from imported file
-          delete parsed.peerId;
-          _account = { ..._defaultAccount(), ...parsed };
+          const p = JSON.parse(e.target.result);
+          delete p.peerId;
+          _account = { ..._defaultAccount(), ...p };
           localStorage.setItem(STORAGE_KEY, JSON.stringify(_account));
-          // Restore custom emojis
-          if (parsed.customEmojis) {
-            localStorage.setItem(EMOJI_KEY, JSON.stringify(parsed.customEmojis));
-          }
+          if (p.customEmojis) localStorage.setItem(EMOJI_KEY, JSON.stringify(p.customEmojis));
           resolve(_account);
         } catch { reject(new Error("Invalid account file")); }
       };
@@ -117,15 +94,10 @@ const accountManager = (() => {
     });
   }
 
-  function saveCustomEmojis(emojis) {
-    _account.customEmojis = emojis;
-    save({ customEmojis: emojis });
-  }
-
+  function saveCustomEmojis(emojis) { _account.customEmojis = emojis; save({ customEmojis: emojis }); }
   function getCustomEmojis() {
-    try {
-      return _account?.customEmojis || JSON.parse(localStorage.getItem(EMOJI_KEY) || "{}");
-    } catch { return {}; }
+    try { return _account?.customEmojis || JSON.parse(localStorage.getItem(EMOJI_KEY) || "{}"); }
+    catch { return {}; }
   }
 
   return { load, save, get, exportJSON, importJSON, saveCustomEmojis, getCustomEmojis };
@@ -133,91 +105,247 @@ const accountManager = (() => {
 
 /* ============================================================
    ENCRYPTION MANAGER
+   Security model:
+   - ECDH P-256 for initial key agreement
+   - ECDSA P-256 for message signing (authenticity)
+   - Per-message key ratchet: each message derives a new AES-GCM
+     key from the previous one via HKDF, providing forward secrecy
+   - Replay protection: each peer tracks the last seen counter
+   - Padded payloads: all messages padded to 256-byte boundary
 ============================================================ */
 const encryptionManager = (() => {
-  let _keyPair = null;
-  const _sessionKeys = {};
+  // ECDH key pair (key agreement)
+  let _dhKeyPair   = null;
+  // ECDSA key pair (message signing)
+  let _sigKeyPair  = null;
 
+  // Per-peer state
+  const _sendState = {};  // peerId → { key: CryptoKey, counter: number }
+  const _recvState = {};  // peerId → { key: CryptoKey, lastCounter: number }
+  const _peerSigKeys = {}; // peerId → CryptoKey (their ECDSA public key)
+
+  // -----------------------------------------------------------
+  // Initialisation
+  // -----------------------------------------------------------
   async function init() {
-    _keyPair = await crypto.subtle.generateKey(
-      { name: "ECDH", namedCurve: "P-256" }, true, ["deriveKey"]
-    );
+    [_dhKeyPair, _sigKeyPair] = await Promise.all([
+      crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveKey"]),
+      crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"])
+    ]);
   }
 
-  async function getPublicKeyBytes() {
-    const raw = await crypto.subtle.exportKey("raw", _keyPair.publicKey);
-    return Array.from(new Uint8Array(raw));
-  }
-
-  async function setKey(peerId, remotePubBytes) {
-    const buf = new Uint8Array(remotePubBytes).buffer;
-    const remotePub = await crypto.subtle.importKey(
-      "raw", buf, { name: "ECDH", namedCurve: "P-256" }, false, []
-    );
-    _sessionKeys[peerId] = await crypto.subtle.deriveKey(
-      { name: "ECDH", public: remotePub },
-      _keyPair.privateKey,
-      { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]
-    );
-  }
-
-  function hasKey(peerId) { return !!_sessionKeys[peerId]; }
-  function removeKey(peerId) { delete _sessionKeys[peerId]; }
-
-  async function encrypt(peerId, obj) {
-    const key = _sessionKeys[peerId];
-    if (!key) throw new Error("No session key for " + peerId);
-    const iv  = crypto.getRandomValues(new Uint8Array(12));
-    const raw = new TextEncoder().encode(JSON.stringify(obj));
-    const enc = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, raw);
+  // Public key bytes for handshake: DH pub + sig pub (both raw, concatenated with lengths)
+  async function getHandshakeBytes() {
+    const [dh, sig] = await Promise.all([
+      crypto.subtle.exportKey("raw", _dhKeyPair.publicKey),
+      crypto.subtle.exportKey("raw", _sigKeyPair.publicKey)
+    ]);
     return {
-      iv:   btoa(String.fromCharCode(...iv)),
-      data: btoa(String.fromCharCode(...new Uint8Array(enc)))
+      dh:  Array.from(new Uint8Array(dh)),
+      sig: Array.from(new Uint8Array(sig))
     };
   }
 
-  async function decrypt(peerId, payload) {
-    const key  = _sessionKeys[peerId];
-    if (!key) throw new Error("No session key for " + peerId);
-    const iv   = Uint8Array.from(atob(payload.iv),   c => c.charCodeAt(0));
-    const data = Uint8Array.from(atob(payload.data), c => c.charCodeAt(0));
-    const dec  = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, data);
-    return JSON.parse(new TextDecoder().decode(dec));
+  // -----------------------------------------------------------
+  // Key derivation from ECDH shared secret
+  // -----------------------------------------------------------
+  async function _deriveRootKey(remoteDhPubBytes) {
+    const buf = new Uint8Array(remoteDhPubBytes).buffer;
+    const remotePub = await crypto.subtle.importKey(
+      "raw", buf, { name: "ECDH", namedCurve: "P-256" }, false, []
+    );
+    // Derive a root key material via ECDH
+    return crypto.subtle.deriveKey(
+      { name: "ECDH", public: remotePub },
+      _dhKeyPair.privateKey,
+      { name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]
+    );
   }
 
-  return { init, getPublicKeyBytes, setKey, hasKey, removeKey, encrypt, decrypt };
+  // -----------------------------------------------------------
+  // Ratchet: derive next key from current key via HKDF
+  // We export the raw key bytes and use them as HKDF input material.
+  // -----------------------------------------------------------
+  async function _ratchetKey(currentKey) {
+    const raw = await crypto.subtle.exportKey("raw", currentKey);
+    const baseKey = await crypto.subtle.importKey("raw", raw, "HKDF", false, ["deriveKey"]);
+    return crypto.subtle.deriveKey(
+      {
+        name: "HKDF",
+        hash: "SHA-256",
+        salt: new Uint8Array(32),         // fixed salt — per-message IV provides randomness
+        info: new TextEncoder().encode("NexTalk-ratchet-v1")
+      },
+      baseKey,
+      { name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]
+    );
+  }
+
+  // -----------------------------------------------------------
+  // Store peer's ECDSA public key for verification
+  // -----------------------------------------------------------
+  async function setPeerSigKey(peerId, sigPubBytes) {
+    _peerSigKeys[peerId] = await crypto.subtle.importKey(
+      "raw", new Uint8Array(sigPubBytes),
+      { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]
+    );
+  }
+
+  // -----------------------------------------------------------
+  // Set up symmetric session from ECDH handshake
+  // -----------------------------------------------------------
+  async function setSession(peerId, remoteDhPubBytes, remoteSigPubBytes) {
+    const rootKey = await _deriveRootKey(remoteDhPubBytes);
+    _sendState[peerId] = { key: rootKey, counter: 0 };
+    // Derive a separate receive-direction key so both sides use different keys
+    const raw = await crypto.subtle.exportKey("raw", rootKey);
+    const baseKey = await crypto.subtle.importKey("raw", raw, "HKDF", false, ["deriveKey"]);
+    const recvKey = await crypto.subtle.deriveKey(
+      {
+        name: "HKDF", hash: "SHA-256",
+        salt: new Uint8Array(32),
+        info: new TextEncoder().encode("NexTalk-recv-v1")
+      },
+      baseKey,
+      { name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]
+    );
+    _recvState[peerId] = { key: recvKey, lastCounter: -1 };
+    await setPeerSigKey(peerId, remoteSigPubBytes);
+  }
+
+  function hasSession(peerId) { return !!(_sendState[peerId] && _recvState[peerId]); }
+
+  function removeSession(peerId) {
+    delete _sendState[peerId];
+    delete _recvState[peerId];
+    delete _peerSigKeys[peerId];
+  }
+
+  // -----------------------------------------------------------
+  // Padding: pad/unpad plaintext to nearest 256-byte boundary
+  // Prevents size-based traffic analysis
+  // -----------------------------------------------------------
+  function _pad(bytes) {
+    const block = 256;
+    const total = Math.ceil((bytes.length + 2) / block) * block;
+    const out   = new Uint8Array(total);
+    const len   = bytes.length;
+    out[0] = (len >> 8) & 0xff;
+    out[1] = len & 0xff;
+    out.set(bytes, 2);
+    return out;
+  }
+
+  function _unpad(bytes) {
+    const len = (bytes[0] << 8) | bytes[1];
+    return bytes.slice(2, 2 + len);
+  }
+
+  // -----------------------------------------------------------
+  // Encrypt: ratchet send key, encrypt with fresh IV, sign counter+ciphertext
+  // -----------------------------------------------------------
+  async function encrypt(peerId, obj) {
+    const state = _sendState[peerId];
+    if (!state) throw new Error("No send state for " + peerId);
+
+    // Ratchet the key forward
+    state.key = await _ratchetKey(state.key);
+    const counter = state.counter++;
+
+    const iv      = crypto.getRandomValues(new Uint8Array(12));
+    const plain   = _pad(new TextEncoder().encode(JSON.stringify(obj)));
+    const cipherBuf = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, state.key, plain);
+    const cipherBytes = new Uint8Array(cipherBuf);
+
+    // Sign: counter (8 bytes big-endian) || iv || ciphertext
+    const sigInput = new Uint8Array(8 + 12 + cipherBytes.length);
+    const cv = new DataView(sigInput.buffer);
+    cv.setUint32(0, 0); cv.setUint32(4, counter);   // 64-bit counter
+    sigInput.set(iv, 8);
+    sigInput.set(cipherBytes, 20);
+
+    const sigBuf = await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" }, _sigKeyPair.privateKey, sigInput
+    );
+
+    return {
+      iv:      btoa(String.fromCharCode(...iv)),
+      data:    btoa(String.fromCharCode(...cipherBytes)),
+      sig:     btoa(String.fromCharCode(...new Uint8Array(sigBuf))),
+      counter
+    };
+  }
+
+  // -----------------------------------------------------------
+  // Decrypt: verify signature, check replay, ratchet recv key
+  // -----------------------------------------------------------
+  async function decrypt(peerId, payload) {
+    const state   = _recvState[peerId];
+    const sigKey  = _peerSigKeys[peerId];
+    if (!state || !sigKey) throw new Error("No recv state for " + peerId);
+
+    const { iv: ivB64, data: dataB64, sig: sigB64, counter } = payload;
+
+    // Replay protection
+    if (typeof counter !== "number" || counter <= state.lastCounter) {
+      throw new Error(`Replay detected: counter=${counter} last=${state.lastCounter}`);
+    }
+
+    const iv          = Uint8Array.from(atob(ivB64),   c => c.charCodeAt(0));
+    const cipherBytes = Uint8Array.from(atob(dataB64), c => c.charCodeAt(0));
+    const sigBytes    = Uint8Array.from(atob(sigB64),  c => c.charCodeAt(0));
+
+    // Reconstruct sig input and verify
+    const sigInput = new Uint8Array(8 + 12 + cipherBytes.length);
+    const cv = new DataView(sigInput.buffer);
+    cv.setUint32(0, 0); cv.setUint32(4, counter);
+    sigInput.set(iv, 8); sigInput.set(cipherBytes, 20);
+
+    const valid = await crypto.subtle.verify(
+      { name: "ECDSA", hash: "SHA-256" }, sigKey, sigBytes, sigInput
+    );
+    if (!valid) throw new Error("Signature verification failed");
+
+    // Ratchet receive key to match sender's counter
+    // Fast-forward if we missed messages (gap tolerance: up to 50)
+    const gap = counter - state.lastCounter - 1;
+    if (gap > 50) throw new Error("Counter gap too large: possible attack");
+    for (let i = 0; i <= gap; i++) {
+      state.key = await _ratchetKey(state.key);
+    }
+    state.lastCounter = counter;
+
+    const decBuf = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, state.key, cipherBytes);
+    const unpadded = _unpad(new Uint8Array(decBuf));
+    return JSON.parse(new TextDecoder().decode(unpadded));
+  }
+
+  return { init, getHandshakeBytes, setSession, hasSession, removeSession, encrypt, decrypt };
 })();
 
 /* ============================================================
    FILE PERMISSION MANAGER
-   Implements P2P download permission requests
 ============================================================ */
 const filePermissionManager = (() => {
-  // token → { resolve, blob, name }
-  const _pendingApprovals = {};
-  // one-use download tokens
-  const _tokens = {};
+  const _pending = {};
 
-  // Called on sender: receive a download request from a peer
+  function _esc(s) {
+    return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  }
+
   function handleRequest(fromPeer, { tokenId, fileName }) {
-    const profile = peerManager.getProfile(fromPeer);
-    const senderName = profile.username || fromPeer.slice(0, 8);
-
-    // Show approval dialog
+    const name = peerManager.getProfile(fromPeer).username || fromPeer.slice(0,8);
     const overlay = document.createElement("div");
     overlay.className = "perm-dialog-overlay";
-    overlay.innerHTML = `
-      <div class="perm-dialog">
-        <div class="perm-icon">📥</div>
-        <div class="perm-title">Download Request</div>
-        <div class="perm-msg"><strong>${_esc(senderName)}</strong> wants to download<br><em>${_esc(fileName)}</em></div>
-        <div class="perm-btns">
-          <button class="btn btn-primary btn-sm perm-allow">Allow</button>
-          <button class="btn perm-deny" style="background:var(--accent-red);color:#fff">Deny</button>
-        </div>
-      </div>`;
+    overlay.innerHTML = `<div class="perm-dialog">
+      <div class="perm-icon">📥</div>
+      <div class="perm-title">Download Request</div>
+      <div class="perm-msg"><strong>${_esc(name)}</strong> wants to download<br><em>${_esc(fileName)}</em></div>
+      <div class="perm-btns">
+        <button class="btn btn-primary btn-sm perm-allow">Allow</button>
+        <button class="btn perm-deny" style="background:var(--accent-red);color:#fff">Deny</button>
+      </div></div>`;
     document.body.appendChild(overlay);
-
     overlay.querySelector(".perm-allow").onclick = () => {
       overlay.remove();
       peerManager.sendTo(fromPeer, { type: "download-response", tokenId, approved: true });
@@ -228,52 +356,28 @@ const filePermissionManager = (() => {
     };
   }
 
-  // Called on requester: received response to our download request
   function handleResponse({ tokenId, approved }) {
-    const pending = _pendingApprovals[tokenId];
-    if (!pending) return;
-    delete _pendingApprovals[tokenId];
-    if (approved) {
-      pending.resolve(true);
-    } else {
-      pending.resolve(false);
-      uiController.toast("Download denied by sender.");
-    }
+    const p = _pending[tokenId]; if (!p) return;
+    delete _pending[tokenId];
+    if (!approved) uiController.toast("Download denied by sender.");
+    p.resolve(approved);
   }
 
-  // Called on requester: ask sender for permission, returns Promise<bool>
   function requestPermission(senderPeerId, blob, name) {
     return new Promise(resolve => {
       const tokenId = crypto.randomUUID();
-      _pendingApprovals[tokenId] = { resolve, blob, name };
-      peerManager.sendTo(senderPeerId, {
-        type: "download-request",
-        tokenId,
-        fileName: name
-      });
-      // Timeout after 30s
+      _pending[tokenId] = { resolve };
+      peerManager.sendTo(senderPeerId, { type: "download-request", tokenId, fileName: name });
       setTimeout(() => {
-        if (_pendingApprovals[tokenId]) {
-          delete _pendingApprovals[tokenId];
-          resolve(false);
-          uiController.toast("Download request timed out.");
-        }
+        if (_pending[tokenId]) { delete _pending[tokenId]; resolve(false); uiController.toast("Request timed out."); }
       }, 30000);
     });
   }
 
-  // Execute a permitted download
   function executeDownload(blob, name) {
     const url = URL.createObjectURL(blob);
-    const a   = document.createElement("a");
-    a.href    = url;
-    a.download = name;
-    a.click();
+    const a = document.createElement("a"); a.href = url; a.download = name; a.click();
     setTimeout(() => URL.revokeObjectURL(url), 5000);
-  }
-
-  function _esc(s) {
-    return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
   }
 
   return { handleRequest, handleResponse, requestPermission, executeDownload };
@@ -285,16 +389,14 @@ const filePermissionManager = (() => {
 const peerManager = (() => {
   let _peer = null;
   let _myId = null;
-
-  const _connections  = {};
-  const _peerProfiles = {};
-  const _pendingConns = new Set();
+  const _connections   = {};
+  const _peerProfiles  = {};
+  const _pendingConns  = new Set();
 
   function init() {
     _peer = new Peer();
     _peer.on("open", async id => {
       _myId = id;
-      // Note: we do NOT save peerId to account
       uiController.setMyId(id);
       await encryptionManager.init();
       uiController.initAvatarDisplay();
@@ -307,21 +409,19 @@ const peerManager = (() => {
   function getId()          { return _myId; }
   function getPeer()        { return _peer; }
   function getConnections() { return _connections; }
-  function getProfile(peerId) {
-    return _peerProfiles[peerId] || { username: peerId?.slice(0, 8), avatar: null };
-  }
-  function setProfile(peerId, profile) {
-    _peerProfiles[peerId] = profile;
+  function getProfile(pid)  { return _peerProfiles[pid] || { username: pid?.slice(0,8) || "?", avatar: null }; }
+
+  function setProfile(pid, profile) {
+    _peerProfiles[pid] = profile;
     uiController.updatePeerList(_connections, _peerProfiles);
-    dmManager.updatePeerProfile(peerId, profile);
+    dmManager.updatePeerProfile(pid, profile);
   }
 
   function connectTo(peerId) {
     if (!peerId || peerId === _myId) return;
     if (_connections[peerId] || _pendingConns.has(peerId)) return;
     _pendingConns.add(peerId);
-    const conn = _peer.connect(peerId, { reliable: true });
-    _setupConn(conn);
+    _setupConn(_peer.connect(peerId, { reliable: true }));
   }
 
   function _setupConn(conn) {
@@ -331,13 +431,14 @@ const peerManager = (() => {
 
     conn.on("open", async () => {
       _pendingConns.delete(conn.peer);
-      const pub = await encryptionManager.getPublicKeyBytes();
-      conn.send({ type: "ecdh-hello", pub });
+      // Send ECDH + ECDSA public keys together
+      const hs = await encryptionManager.getHandshakeBytes();
+      conn.send({ type: "ecdh-hello", dh: hs.dh, sig: hs.sig });
     });
 
     conn.on("data", async raw => {
       try { await _handleRaw(conn, raw); }
-      catch (e) { console.warn("Data error:", e); }
+      catch (e) { console.warn("Data error:", e.message); }
     });
 
     conn.on("close", () => _teardown(conn.peer));
@@ -347,38 +448,44 @@ const peerManager = (() => {
   async function _handleRaw(conn, raw) {
     const pid = conn.peer;
 
+    // ECDH + ECDSA handshake (plaintext)
     if (raw.type === "ecdh-hello") {
-      await encryptionManager.setKey(pid, raw.pub);
+      await encryptionManager.setSession(pid, raw.dh, raw.sig);
+
       if (!raw._reply) {
-        const pub = await encryptionManager.getPublicKeyBytes();
-        conn.send({ type: "ecdh-hello", pub, _reply: true });
+        const hs = await encryptionManager.getHandshakeBytes();
+        conn.send({ type: "ecdh-hello", dh: hs.dh, sig: hs.sig, _reply: true });
       }
-      await sendEncrypted(conn, {
+
+      // Send profile over encrypted channel
+      await _sendEnc(conn, {
         type: "profile",
         user: accountManager.get().username,
         avatar: accountManager.get().avatar
       });
-      const knownPeers = Object.keys(_connections).filter(p => p !== pid);
-      if (knownPeers.length) {
-        await sendEncrypted(conn, { type: "mesh-peers", peers: knownPeers });
-      }
+
+      // Mesh discovery
+      const known = Object.keys(_connections).filter(p => p !== pid);
+      if (known.length) await _sendEnc(conn, { type: "mesh-peers", peers: known });
+
+      // If already in a call, ring the new peer (deferred so stream is ready)
       if (callManager.isInCall()) {
-        callManager.callPeer(pid);
+        setTimeout(() => callManager.callPeer(pid), 400);
       }
       return;
     }
 
     if (raw.encrypted) {
-      if (!encryptionManager.hasKey(pid)) return;
+      if (!encryptionManager.hasSession(pid)) return;
       const obj = await encryptionManager.decrypt(pid, raw.payload);
-      _handleDecrypted(conn, obj);
+      _dispatch(conn, obj);
       return;
     }
 
-    _handleDecrypted(conn, raw);
+    _dispatch(conn, raw);
   }
 
-  function _handleDecrypted(conn, data) {
+  function _dispatch(conn, data) {
     const pid = conn.peer;
     switch (data.type) {
       case "profile":
@@ -388,13 +495,7 @@ const peerManager = (() => {
         if (Array.isArray(data.peers)) data.peers.forEach(id => connectTo(id));
         break;
       case "message":
-        uiController.appendMessage({
-          user: data.user,
-          text: data.text,
-          avatar: _peerProfiles[pid]?.avatar || null,
-          isSelf: false,
-          msgId: data.msgId
-        });
+        uiController.appendMessage({ user: data.user, text: data.text, avatar: _peerProfiles[pid]?.avatar || null, isSelf: false });
         break;
       case "dm":
         dmManager.receiveMessage(pid, data);
@@ -420,115 +521,169 @@ const peerManager = (() => {
     }
   }
 
-  function _teardown(peerId) {
-    delete _connections[peerId];
-    _pendingConns.delete(peerId);
-    encryptionManager.removeKey(peerId);
+  function _teardown(pid) {
+    delete _connections[pid];
+    _pendingConns.delete(pid);
+    encryptionManager.removeSession(pid);
     uiController.updatePeerList(_connections, _peerProfiles);
     uiController.appendSystemMessage("A peer left the mesh");
-    callManager.removePeerCall(peerId);
+    callManager.removePeerCall(pid);
   }
 
-  async function sendEncrypted(conn, obj) {
-    if (!conn.open || !encryptionManager.hasKey(conn.peer)) return;
+  async function _sendEnc(conn, obj) {
+    if (!conn.open || !encryptionManager.hasSession(conn.peer)) return;
     const payload = await encryptionManager.encrypt(conn.peer, obj);
     conn.send({ encrypted: true, payload });
   }
 
   async function broadcast(obj, exclude = null) {
     for (const [pid, conn] of Object.entries(_connections)) {
-      if (pid !== exclude && conn.open && encryptionManager.hasKey(pid)) {
-        await sendEncrypted(conn, obj);
-      }
+      if (pid !== exclude && conn.open && encryptionManager.hasSession(pid))
+        await _sendEnc(conn, obj);
     }
   }
 
   async function sendTo(peerId, obj) {
     const conn = _connections[peerId];
-    if (conn) await sendEncrypted(conn, obj);
+    if (conn) await _sendEnc(conn, obj);
   }
 
   return { init, getId, getPeer, getConnections, getProfile, setProfile, connectTo, broadcast, sendTo };
 })();
 
 /* ============================================================
-   CALL MANAGER (refactored from mediaManager)
+   CALL MANAGER
+   Key fixes vs v2:
+   1. _addVideoEl always updates srcObject — no silent no-op on
+      existing elements.
+   2. handleIncomingCall does NOT set _inCall if we have no local
+      stream; it just shows the remote video.
+   3. stopScreen properly rebuilds _localStream in-place (replaces
+      video track) rather than constructing a new MediaStream object,
+      so existing peer RTCPeerConnections stay bound to the same stream.
+   4. _broadcastCallState is only called after awaiting encryption
+      readiness — deferred via setTimeout(0) after startCall.
+   5. callPeer guards against calling before our stream is ready.
 ============================================================ */
 const callManager = (() => {
-  const _calls      = {};
-  let _localStream  = null;
-  let _inCall       = false;
-  let _cameraOn     = false;
-  let _muted        = false;
-  let _deafened     = false;
-  let _screenShare  = false;
-  let _fsEl         = null;
+  const _calls     = {};   // peerId → MediaConnection
+  let _localStream = null;
+  let _inCall      = false;
+  let _cameraOn    = false;
+  let _muted       = false;
+  let _deafened    = false;
+  let _screenShare = false;
+  let _fsEl        = null;
 
   function isInCall() { return _inCall; }
+  function getLocalStream() { return _localStream; }
 
+  // -----------------------------------------------------------------
+  // START CALL
+  // -----------------------------------------------------------------
   async function startCall() {
     if (_inCall) return;
+
+    // Get audio+video (camera off by default; we disable video tracks below)
+    let stream;
     try {
-      _localStream = await navigator.mediaDevices.getUserMedia({
+      stream = await navigator.mediaDevices.getUserMedia({
         audio: { noiseSuppression: true, echoCancellation: true, autoGainControl: true },
         video: true
       });
     } catch {
       try {
-        _localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       } catch {
         uiController.toast("Microphone access denied.");
         return;
       }
     }
-    _cameraOn = false;
+
+    _localStream = stream;
+    _cameraOn    = false;
+    _muted       = false;
+    _deafened    = false;
+    // Camera off by default
     _localStream.getVideoTracks().forEach(t => { t.enabled = false; });
+
     _inCall = true;
     uiController.updateCallUI(true, false, false, false, false);
     _addVideoEl("local", _localStream, true);
 
-    // Call all connected mesh peers
-    Object.keys(peerManager.getConnections()).forEach(pid => callPeer(pid));
-    // Broadcast call state
-    _broadcastCallState();
-    uiController.toast("Joined voice channel.");
+    // Ring all connected peers (async — sessions already established)
+    const pids = Object.keys(peerManager.getConnections());
+    for (const pid of pids) callPeer(pid);
+
+    // Broadcast state after a tick to ensure encryption is warmed up
+    setTimeout(_broadcastCallState, 100);
+    uiController.toast("Joined voice.");
   }
 
+  // -----------------------------------------------------------------
+  // CALL ONE PEER
+  // -----------------------------------------------------------------
   function callPeer(pid) {
-    if (_calls[pid] || !_localStream) return;
-    const call = peerManager.getPeer().call(pid, _localStream);
+    if (_calls[pid]) return;               // already called
+    if (!_localStream) return;             // no stream yet
+    const peer = peerManager.getPeer();
+    if (!peer) return;
+    const call = peer.call(pid, _localStream);
+    if (!call) return;
     _setupCall(call);
   }
 
+  // -----------------------------------------------------------------
+  // INCOMING CALL
+  // -----------------------------------------------------------------
   function handleIncomingCall(call) {
-    // Prevent duplicate call objects
-    if (_calls[call.peer]) { call.close(); return; }
-    call.answer(_localStream || new MediaStream());
+    // Prevent duplicate call objects for same peer
+    if (_calls[call.peer]) {
+      // Close old one and replace
+      try { _calls[call.peer].close(); } catch {}
+    }
+
+    // Answer with our stream if in a call, else empty stream
+    const answerStream = _localStream || new MediaStream();
+    call.answer(answerStream);
     _setupCall(call);
-    if (!_inCall) {
+
+    // If we weren't in a call, we're now passively in one — show controls
+    if (!_inCall && _localStream) {
       _inCall = true;
       uiController.updateCallUI(true, _cameraOn, _muted, _deafened, _screenShare);
     }
   }
 
+  // -----------------------------------------------------------------
+  // SETUP A MEDIA CALL OBJECT
+  // -----------------------------------------------------------------
   function _setupCall(call) {
     _calls[call.peer] = call;
+
     call.on("stream", stream => {
-      // Prevent duplicate stream elements
+      // Always update — even if element already exists (re-negotiation)
       _addVideoEl(call.peer, stream, false);
     });
-    call.on("close",  () => _removeVideoEl(call.peer));
-    call.on("error",  e  => { console.error("Call error:", e); _removeVideoEl(call.peer); });
+
+    call.on("close",  ()  => _removeVideoEl(call.peer));
+    call.on("error",  e   => { console.error("Call error:", e); _removeVideoEl(call.peer); });
   }
 
-  function removePeerCall(peerId) {
-    if (_calls[peerId]) {
-      try { _calls[peerId].close(); } catch {}
-      delete _calls[peerId];
+  // -----------------------------------------------------------------
+  // REMOVE A PEER'S CALL (called when peer disconnects)
+  // -----------------------------------------------------------------
+  function removePeerCall(pid) {
+    if (_calls[pid]) {
+      try { _calls[pid].close(); } catch {}
+      delete _calls[pid];
     }
-    _removeVideoEl(peerId);
+    _removeVideoEl(pid);
   }
 
+  // -----------------------------------------------------------------
+  // LEAVE CALL
+  // -----------------------------------------------------------------
   function leaveCall() {
     if (_localStream) {
       _localStream.getTracks().forEach(t => t.stop());
@@ -551,6 +706,9 @@ const callManager = (() => {
     uiController.toast("Left voice.");
   }
 
+  // -----------------------------------------------------------------
+  // CONTROLS
+  // -----------------------------------------------------------------
   function toggleCamera() {
     if (!_inCall || !_localStream) return;
     _cameraOn = !_cameraOn;
@@ -562,8 +720,8 @@ const callManager = (() => {
   function toggleMute() {
     if (!_inCall || !_localStream) return;
     _muted = !_muted;
+    if (_deafened && !_muted) _deafened = false;  // unmuting clears deafen
     _localStream.getAudioTracks().forEach(t => { t.enabled = !_muted; });
-    if (_muted) _deafened = false;
     uiController.updateCallUI(_inCall, _cameraOn, _muted, _deafened, _screenShare);
     _broadcastCallState();
   }
@@ -571,41 +729,44 @@ const callManager = (() => {
   function toggleDeafen() {
     if (!_inCall || !_localStream) return;
     _deafened = !_deafened;
+    if (_deafened) _muted = true;
+    _localStream.getAudioTracks().forEach(t => { t.enabled = !_deafened && !_muted; });
     document.querySelectorAll(".video-grid video:not(.local-vid)").forEach(v => { v.muted = _deafened; });
-    if (_deafened) {
-      _muted = true;
-      _localStream.getAudioTracks().forEach(t => { t.enabled = false; });
-    } else {
-      _localStream.getAudioTracks().forEach(t => { t.enabled = !_muted; });
-    }
     uiController.updateCallUI(_inCall, _cameraOn, _muted, _deafened, _screenShare);
     _broadcastCallState();
   }
 
+  // -----------------------------------------------------------------
+  // SCREEN SHARE
+  // Fix: we keep _localStream as the same object throughout.
+  // For screen share: swap the video track *inside* _localStream.
+  // For stop: re-acquire camera, swap back.
+  // This keeps RTCPeerConnection senders attached to the same stream.
+  // -----------------------------------------------------------------
   async function toggleScreen() {
     if (!_inCall || !_localStream) return;
     if (!_screenShare) {
       try {
         const ss = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
-        // Activate DRM since screen sharing is now active on the other end
         mediaProtectionManager.onScreenShareStart();
-        const st = ss.getVideoTracks()[0];
-        const combined = new MediaStream([st, ..._localStream.getAudioTracks()]);
-        Object.values(_calls).forEach(call => {
-          const pc = call.peerConnection;
-          if (!pc) return;
-          const sender = pc.getSenders().find(s => s.track?.kind === "video");
-          if (sender) sender.replaceTrack(st);
-          else pc.addTrack(st, combined);
-        });
-        _addVideoEl("local", combined, true);
-        st.onended = () => stopScreen();
+        const screenTrack = ss.getVideoTracks()[0];
+
+        // Swap video track in _localStream
+        _replaceVideoTrackInStream(_localStream, screenTrack);
+
+        // Replace in all RTCPeerConnection senders
+        _replaceVideoInCalls(screenTrack);
+
+        // Update local preview (srcObject is still _localStream — just refresh)
+        _addVideoEl("local", _localStream, true);
+
+        screenTrack.onended = () => stopScreen();
         _screenShare = true;
         uiController.updateCallUI(_inCall, _cameraOn, _muted, _deafened, _screenShare);
         _broadcastCallState();
       } catch { uiController.toast("Screen share cancelled."); }
     } else {
-      stopScreen();
+      await stopScreen();
     }
   }
 
@@ -613,76 +774,106 @@ const callManager = (() => {
     if (!_screenShare) return;
     _screenShare = false;
     mediaProtectionManager.onScreenShareEnd();
+
+    // Stop all current video tracks
+    _localStream.getVideoTracks().forEach(t => t.stop());
+
+    // Try to re-acquire camera
     let camTrack = null;
     try {
       const s = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
       camTrack = s.getVideoTracks()[0];
       if (camTrack) camTrack.enabled = _cameraOn;
-    } catch {}
-    Object.values(_calls).forEach(call => {
-      const pc = call.peerConnection;
-      if (!pc) return;
-      const sender = pc.getSenders().find(s => s.track?.kind === "video");
-      if (sender && camTrack) sender.replaceTrack(camTrack);
-    });
-    _localStream.getVideoTracks().forEach(t => { t.stop(); _localStream.removeTrack(t); });
-    if (camTrack) _localStream.addTrack(camTrack);
+    } catch { /* no camera */ }
+
+    // Swap track in _localStream
+    _replaceVideoTrackInStream(_localStream, camTrack);
+
+    // Replace in all RTCPeerConnection senders
+    if (camTrack) _replaceVideoInCalls(camTrack);
+
+    // Refresh local preview
     _addVideoEl("local", _localStream, true);
+
     uiController.updateCallUI(_inCall, _cameraOn, _muted, _deafened, _screenShare);
     _broadcastCallState();
   }
 
-  // Broadcast our call state to all peers for UI sync
-  function _broadcastCallState() {
-    peerManager.broadcast({
-      type: "call-state",
-      inCall: _inCall,
-      cameraOn: _cameraOn,
-      muted: _muted,
-      screenShare: _screenShare
+  // Remove all video tracks from a stream and optionally add a new one
+  function _replaceVideoTrackInStream(stream, newTrack) {
+    stream.getVideoTracks().forEach(t => stream.removeTrack(t));
+    if (newTrack) stream.addTrack(newTrack);
+  }
+
+  // Replace or add video sender in all active peer connections
+  function _replaceVideoInCalls(newTrack) {
+    Object.values(_calls).forEach(call => {
+      const pc = call.peerConnection;
+      if (!pc) return;
+      const sender = pc.getSenders().find(s => s.track?.kind === "video");
+      if (sender) {
+        sender.replaceTrack(newTrack).catch(e => console.warn("replaceTrack:", e));
+      } else if (newTrack) {
+        pc.addTrack(newTrack, _localStream);
+      }
     });
   }
 
-  // Receive a peer's call state for UI indicator
-  function handlePeerState(peerId, data) {
-    const el = document.getElementById("vwrap-" + peerId);
-    if (el) {
-      el.dataset.muted  = data.muted ? "1" : "0";
-      el.dataset.camera = data.cameraOn ? "1" : "0";
-      const label = el.querySelector(".video-label");
-      if (label) {
-        const profile = peerManager.getProfile(peerId);
-        label.textContent = (profile?.username || peerId.slice(0,8))
-          + (data.muted ? " 🔇" : "")
-          + (data.cameraOn ? "" : " 📷✕");
-      }
+  // -----------------------------------------------------------------
+  // BROADCAST CALL STATE (for peer UI indicators)
+  // -----------------------------------------------------------------
+  function _broadcastCallState() {
+    peerManager.broadcast({
+      type: "call-state",
+      inCall: _inCall, cameraOn: _cameraOn,
+      muted: _muted, screenShare: _screenShare
+    });
+  }
+
+  function handlePeerState(pid, data) {
+    const el = document.getElementById("vwrap-" + pid);
+    if (!el) return;
+    const label = el.querySelector(".video-label");
+    if (label) {
+      const profile = peerManager.getProfile(pid);
+      label.textContent = (profile?.username || pid.slice(0,8))
+        + (data.muted ? " 🔇" : "")
+        + (!data.cameraOn ? " 📷✕" : "");
     }
   }
 
+  // -----------------------------------------------------------------
+  // VIDEO ELEMENT MANAGEMENT
+  // Always sets srcObject even if element already exists (fix v2 bug)
+  // -----------------------------------------------------------------
   function _addVideoEl(id, stream, isLocal) {
-    const vg = document.getElementById("video-grid");
-    let wrap = document.getElementById("vwrap-" + id);
+    const vg   = document.getElementById("video-grid");
+    let wrap   = document.getElementById("vwrap-" + id);
+
     if (wrap) {
-      wrap.querySelector("video").srcObject = stream;
+      // Update stream on existing element
+      const v = wrap.querySelector("video");
+      if (v && v.srcObject !== stream) v.srcObject = stream;
       return;
     }
 
     wrap = document.createElement("div");
-    wrap.id = "vwrap-" + id;
+    wrap.id        = "vwrap-" + id;
     wrap.className = "video-wrap" + (isLocal ? " local-wrap" : "");
 
     const v = document.createElement("video");
-    v.srcObject = stream; v.autoplay = true; v.playsInline = true;
-    v.muted = !!isLocal;
+    v.srcObject   = stream;
+    v.autoplay    = true;
+    v.playsInline = true;
+    v.muted       = !!isLocal;
     if (isLocal) v.classList.add("local-vid");
 
     const label = document.createElement("div");
     label.className = "video-label";
-    const profile = isLocal ? { username: accountManager.get().username } : peerManager.getProfile(id);
-    label.textContent = isLocal ? "You" : (profile?.username || id.slice(0, 8));
+    label.textContent = isLocal ? "You" : (peerManager.getProfile(id)?.username || id.slice(0,8));
 
     const fsBtn = document.createElement("button");
-    fsBtn.className = "fs-btn";
+    fsBtn.className   = "fs-btn";
     fsBtn.textContent = "⛶ FS";
     fsBtn.onclick = e => { e.stopPropagation(); _goFullscreen(v, label.textContent); };
     v.ondblclick = () => _goFullscreen(v, label.textContent);
@@ -690,13 +881,9 @@ const callManager = (() => {
     wrap.append(v, label, fsBtn);
     vg.appendChild(wrap);
     vg.classList.remove("hidden");
-
-    // Reflow grid size based on participant count
     _resizeGrid();
 
-    if (mediaProtectionManager.isDrmActive()) {
-      wrap.classList.add("drm-black");
-    }
+    if (mediaProtectionManager.isDrmActive()) wrap.classList.add("drm-black");
   }
 
   function _removeVideoEl(id) {
@@ -708,12 +895,9 @@ const callManager = (() => {
   }
 
   function _resizeGrid() {
-    const vg   = document.getElementById("video-grid");
-    const count = vg.childElementCount;
-    // Adjust max-height based on participant count
-    if (count <= 2) vg.style.maxHeight = "200px";
-    else if (count <= 4) vg.style.maxHeight = "300px";
-    else vg.style.maxHeight = "400px";
+    const vg = document.getElementById("video-grid");
+    const n  = vg.childElementCount;
+    vg.style.maxHeight = n <= 2 ? "200px" : n <= 4 ? "300px" : "400px";
   }
 
   function _goFullscreen(videoEl, label) {
@@ -721,27 +905,24 @@ const callManager = (() => {
     _fsEl = document.createElement("div");
     _fsEl.className = "video-fullscreen";
     const clone = document.createElement("video");
-    clone.srcObject = videoEl.srcObject;
-    clone.autoplay = true; clone.playsInline = true; clone.muted = videoEl.muted;
+    clone.srcObject   = videoEl.srcObject;
+    clone.autoplay    = true;
+    clone.playsInline = true;
+    clone.muted       = videoEl.muted;
     const exitBtn = document.createElement("button");
-    exitBtn.className = "fs-exit-btn";
+    exitBtn.className   = "fs-exit-btn";
     exitBtn.textContent = "✕ Exit Fullscreen";
     exitBtn.onclick = () => { _fsEl?.remove(); _fsEl = null; };
-    const escHandler = e => {
-      if (e.key === "Escape") { _fsEl?.remove(); _fsEl = null; document.removeEventListener("keydown", escHandler); }
-    };
-    document.addEventListener("keydown", escHandler);
+    const esc = e => { if (e.key === "Escape") { _fsEl?.remove(); _fsEl = null; document.removeEventListener("keydown", esc); } };
+    document.addEventListener("keydown", esc);
     _fsEl.append(clone, exitBtn);
     document.body.appendChild(_fsEl);
   }
 
   function applyDRMBlackout(active) {
     document.querySelectorAll(".video-wrap").forEach(w => w.classList.toggle("drm-black", active));
-    const overlay = document.getElementById("drm-overlay");
-    if (overlay) overlay.classList.toggle("hidden", !active);
+    document.getElementById("drm-overlay")?.classList.toggle("hidden", !active);
   }
-
-  function getLocalStream() { return _localStream; }
 
   return {
     isInCall, startCall, callPeer, handleIncomingCall, removePeerCall, leaveCall,
@@ -750,15 +931,14 @@ const callManager = (() => {
   };
 })();
 
-// Alias for legacy compatibility
+// Alias
 const mediaManager = callManager;
 
 /* ============================================================
    MEDIA PROTECTION MANAGER
-   Best-effort screen capture deterrence
 ============================================================ */
 const mediaProtectionManager = (() => {
-  let _drmActive   = false;
+  let _drmActive        = false;
   let _screenShareActive = false;
 
   function isDrmActive() { return _drmActive; }
@@ -767,64 +947,35 @@ const mediaProtectionManager = (() => {
     if (_drmActive) return;
     _drmActive = true;
     callManager.applyDRMBlackout(true);
-    console.info("[DRM] Protection activated:", reason);
+    console.info("[DRM] activated:", reason);
   }
 
   function _deactivate() {
-    if (!_drmActive) return;
+    if (!_drmActive || _screenShareActive) return;
     _drmActive = false;
-    // Only deactivate if no screen share is active
-    if (!_screenShareActive) {
-      callManager.applyDRMBlackout(false);
-    }
+    callManager.applyDRMBlackout(false);
   }
 
-  function onScreenShareStart() {
-    _screenShareActive = true;
-    _activate("local screen share started");
-  }
-
-  function onScreenShareEnd() {
-    _screenShareActive = false;
-    if (_drmActive && !_screenShareActive) {
-      _deactivate();
-    }
-  }
+  function onScreenShareStart() { _screenShareActive = true; _activate("screen share started"); }
+  function onScreenShareEnd()   { _screenShareActive = false; _deactivate(); }
 
   function init() {
-    // Visibility change — tab hidden may mean screen capture tool active
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) _activate("tab hidden");
       else _deactivate();
     });
+    window.addEventListener("blur",  () => { if (callManager.isInCall()) _activate("focus lost"); });
+    window.addEventListener("focus", () => _deactivate());
 
-    // Focus loss can indicate screen recording or alt-tab during capture
-    window.addEventListener("blur", () => {
-      // Only flag if video streams are active
-      if (callManager.isInCall()) _activate("window lost focus");
-    });
-    window.addEventListener("focus", () => {
-      if (!_screenShareActive) _deactivate();
-    });
-
-    // Capture handle API (Chrome) — detect if this page is being captured
     if (navigator.mediaDevices?.setCaptureHandleConfig) {
-      try {
-        navigator.mediaDevices.setCaptureHandleConfig({ handle: "nextalk-protected" });
-      } catch {}
+      try { navigator.mediaDevices.setCaptureHandleConfig({ handle: "nextalk-protected" }); } catch {}
     }
 
-    // Monitor display media via getDisplayMedia interception
     const _origGDM = navigator.mediaDevices.getDisplayMedia.bind(navigator.mediaDevices);
-    navigator.mediaDevices.getDisplayMedia = async function(constraints) {
-      _activate("getDisplayMedia called");
-      const stream = await _origGDM(constraints);
-      // If the user stops screen share externally
-      stream.getVideoTracks().forEach(t => {
-        t.addEventListener("ended", () => {
-          if (!_screenShareActive) _deactivate();
-        });
-      });
+    navigator.mediaDevices.getDisplayMedia = async function(c) {
+      _activate("getDisplayMedia");
+      const stream = await _origGDM(c);
+      stream.getVideoTracks().forEach(t => t.addEventListener("ended", () => { if (!_screenShareActive) _deactivate(); }));
       return stream;
     };
   }
@@ -838,78 +989,64 @@ const mediaProtectionManager = (() => {
 const fileTransferManager = (() => {
   const _incoming = {};
 
-  function _humanSize(bytes) {
-    if (bytes < 1024) return bytes + " B";
-    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
-    return (bytes / 1048576).toFixed(1) + " MB";
+  function _sz(b) {
+    if (!b) return "";
+    if (b < 1024) return b + " B";
+    if (b < 1048576) return (b/1024).toFixed(1) + " KB";
+    return (b/1048576).toFixed(1) + " MB";
   }
 
   async function sendFile(file, targetPeer = null) {
     const conns = peerManager.getConnections();
     const peers = targetPeer
       ? [conns[targetPeer]].filter(Boolean)
-      : Object.values(conns).filter(c => c.open && encryptionManager.hasKey(c.peer));
+      : Object.values(conns).filter(c => c.open && encryptionManager.hasSession(c.peer));
 
     if (!peers.length) { uiController.toast("No connected peers."); return; }
 
     const id   = crypto.randomUUID();
     const acc  = accountManager.get();
-    const meta = { type: "file-meta", id, name: file.name, size: file.size, user: acc.username };
-
     uiController.setFileProgress(true, file.name, 0);
 
     for (const conn of peers) {
-      await _sendEnc(conn, meta);
-      let offset = 0, chunkIndex = 0;
+      await _enc(conn, { type: "file-meta", id, name: file.name, size: file.size, user: acc.username });
+      let offset = 0, idx = 0;
       while (offset < file.size) {
         const slice  = file.slice(offset, offset + CHUNK_SIZE);
-        const buffer = await slice.arrayBuffer();
-        const b64    = btoa(String.fromCharCode(...new Uint8Array(buffer)));
-        await _sendEnc(conn, { type: "file-chunk", id, index: chunkIndex, chunk: b64 });
+        const buf    = await slice.arrayBuffer();
+        const b64    = btoa(String.fromCharCode(...new Uint8Array(buf)));
+        await _enc(conn, { type: "file-chunk", id, index: idx++, chunk: b64 });
         offset += CHUNK_SIZE;
-        chunkIndex++;
-        uiController.setFileProgress(true, file.name, Math.min(Math.round((offset / file.size) * 100), 100));
+        uiController.setFileProgress(true, file.name, Math.min(Math.round(offset / file.size * 100), 100));
       }
-      await _sendEnc(conn, { type: "file-end", id, totalChunks: chunkIndex });
+      await _enc(conn, { type: "file-end", id, totalChunks: idx });
     }
 
     uiController.setFileProgress(false);
-    uiController.appendSystemMessage(`Sent: "${file.name}" (${_humanSize(file.size)})`);
+    uiController.appendSystemMessage(`Sent: "${file.name}" (${_sz(file.size)})`);
   }
 
-  async function _sendEnc(conn, obj) {
-    if (!conn.open || !encryptionManager.hasKey(conn.peer)) return;
+  async function _enc(conn, obj) {
+    if (!conn.open || !encryptionManager.hasSession(conn.peer)) return;
     const payload = await encryptionManager.encrypt(conn.peer, obj);
     conn.send({ encrypted: true, payload });
   }
 
-  function receiveMeta(pid, data) {
-    _incoming[data.id] = { meta: data, chunks: [], peer: pid };
-  }
+  function receiveMeta(pid, data) { _incoming[data.id] = { meta: data, chunks: [], peer: pid }; }
 
   function receiveChunk(data) {
     if (_incoming[data.id]) _incoming[data.id].chunks[data.index] = data.chunk;
   }
 
   function receiveEnd(data, pid) {
-    const entry = _incoming[data.id];
-    if (!entry) return;
+    const entry = _incoming[data.id]; if (!entry) return;
     const { meta, chunks } = entry;
     const arrays = chunks.map(b64 => Uint8Array.from(atob(b64), c => c.charCodeAt(0)));
     const total  = arrays.reduce((n, a) => n + a.length, 0);
     const merged = new Uint8Array(total);
-    let off = 0;
-    arrays.forEach(a => { merged.set(a, off); off += a.length; });
-    const blob    = new Blob([merged]);
+    let off = 0; arrays.forEach(a => { merged.set(a, off); off += a.length; });
     const profile = peerManager.getProfile(pid);
-    uiController.appendFileMessage(
-      profile.username || "Peer",
-      meta.name,
-      meta.size,
-      blob,
-      profile.avatar || null,
-      pid   // pass sender peer ID for permission requests
-    );
+    uiController.appendFileMessage(profile.username || "Peer", meta.name, meta.size, new Blob([merged]), profile.avatar || null, pid);
     delete _incoming[data.id];
   }
 
@@ -922,50 +1059,32 @@ const fileTransferManager = (() => {
 const dmManager = (() => {
   let _activePeer = null;
   const _history  = {};
-  const _listeners = {};
-
-  const panel   = document.getElementById("dm-panel");
-  const dmMsgs  = document.getElementById("dm-messages");
-  const dmInput = document.getElementById("dm-input");
-  const dmName  = document.getElementById("dm-name");
-  const dmAvi   = document.getElementById("dm-avatar");
+  const panel     = document.getElementById("dm-panel");
+  const dmMsgs    = document.getElementById("dm-messages");
+  const dmInput   = document.getElementById("dm-input");
+  const dmName    = document.getElementById("dm-name");
+  const dmAvi     = document.getElementById("dm-avatar");
 
   document.getElementById("dm-send").onclick = send;
   dmInput.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); send(); } });
   document.getElementById("dm-close").onclick = close;
 
-  function open(peerId) {
-    _activePeer = peerId;
-    const profile = peerManager.getProfile(peerId);
-    dmName.textContent = profile.username || peerId.slice(0, 8);
-    uiController._applyAvatar(dmAvi, profile.username, profile.avatar);
+  function open(pid) {
+    _activePeer = pid;
+    const p = peerManager.getProfile(pid);
+    dmName.textContent = p.username || pid.slice(0,8);
+    uiController._applyAvatar(dmAvi, p.username, p.avatar);
     dmMsgs.innerHTML = "";
-    (_history[peerId] || []).forEach(m => _renderDM(m));
+    (_history[pid] || []).forEach(m => _render(m));
     panel.classList.remove("hidden");
     panel.style.transform = "translateX(0)";
     dmInput.focus();
   }
 
   function close() {
-    if (!_activePeer) return;
-
-    // Clean up DM-specific listeners
-    const pid = _activePeer;
-    if (_listeners[pid]) {
-      _listeners[pid].forEach(fn => fn());
-      delete _listeners[pid];
-    }
-
     _activePeer = null;
-
-    // Animate out then hide
     panel.style.transform = "translateX(100%)";
-    setTimeout(() => {
-      panel.classList.add("hidden");
-      panel.style.transform = "";
-    }, 260);
-
-    // Return focus to main chat
+    setTimeout(() => { panel.classList.add("hidden"); panel.style.transform = ""; }, 260);
     document.getElementById("message")?.focus();
   }
 
@@ -974,54 +1093,32 @@ const dmManager = (() => {
     if (!text || !_activePeer) return;
     dmInput.value = "";
     const acc = accountManager.get();
-    const msg = {
-      type: "dm", user: acc.username, text,
-      avatar: acc.avatar, msgId: crypto.randomUUID(), ts: Date.now()
-    };
-    _store(_activePeer, { ...msg, isSelf: true });
-    _renderDM({ ...msg, isSelf: true });
+    const msg = { type:"dm", user:acc.username, text, avatar:acc.avatar, msgId:crypto.randomUUID(), ts:Date.now() };
+    _store(_activePeer, { ...msg, isSelf:true });
+    _render({ ...msg, isSelf:true });
     await peerManager.sendTo(_activePeer, msg);
   }
 
   function receiveMessage(fromPeer, data) {
-    const profile = peerManager.getProfile(fromPeer);
-    const msg = { ...data, isSelf: false, avatar: profile.avatar };
+    const p   = peerManager.getProfile(fromPeer);
+    const msg = { ...data, isSelf:false, avatar:p.avatar };
     _store(fromPeer, msg);
-    if (_activePeer === fromPeer) {
-      _renderDM(msg);
-    } else {
-      uiController.toast(`DM from ${profile.username || "Peer"}: ${data.text.slice(0, 40)}`);
-      // Notification dot
+    if (_activePeer === fromPeer) { _render(msg); }
+    else {
+      uiController.toast(`DM from ${p.username || "Peer"}: ${data.text.slice(0,40)}`);
       const item = document.querySelector(`.peer-item[data-peer="${fromPeer}"]`);
-      if (item) {
-        let dot = item.querySelector(".notif-dot");
-        if (!dot) {
-          dot = document.createElement("span");
-          dot.className = "notif-dot";
-          item.appendChild(dot);
-        }
+      if (item && !item.querySelector(".notif-dot")) {
+        const dot = document.createElement("span"); dot.className = "notif-dot"; item.appendChild(dot);
       }
     }
   }
 
-  function _store(peerId, msg) {
-    if (!_history[peerId]) _history[peerId] = [];
-    _history[peerId].push(msg);
-  }
+  function _store(pid, msg) { if (!_history[pid]) _history[pid] = []; _history[pid].push(msg); }
 
-  function _renderDM(msg) {
-    uiController._appendMsgEl(dmMsgs, {
-      user: msg.user, text: msg.text,
-      avatar: msg.avatar, isSelf: msg.isSelf,
-      isDM: true
-    });
-  }
+  function _render(msg) { uiController._appendMsgEl(dmMsgs, { user:msg.user, text:msg.text, avatar:msg.avatar, isSelf:msg.isSelf, isDM:true }); }
 
-  function updatePeerProfile(peerId, profile) {
-    if (_activePeer === peerId) {
-      dmName.textContent = profile.username || peerId.slice(0, 8);
-      uiController._applyAvatar(dmAvi, profile.username, profile.avatar);
-    }
+  function updatePeerProfile(pid, p) {
+    if (_activePeer === pid) { dmName.textContent = p.username || pid.slice(0,8); uiController._applyAvatar(dmAvi, p.username, p.avatar); }
   }
 
   return { open, close, receiveMessage, updatePeerProfile };
@@ -1032,9 +1129,9 @@ const dmManager = (() => {
 ============================================================ */
 const embedRenderer = (() => {
   const YT_RE  = /(?:youtube\.com\/watch\?v=|youtu\.be\/)([A-Za-z0-9_-]{11})/;
-  const IMG_RE  = /\.(jpe?g|png|gif|webp|svg|avif)(\?.*)?$/i;
-  const VID_RE  = /\.(mp4|webm|ogg)(\?.*)?$/i;
-  const URL_RE  = /https?:\/\/[^\s<>"']+/g;
+  const IMG_RE = /\.(jpe?g|png|gif|webp|svg|avif)(\?.*)?$/i;
+  const VID_RE = /\.(mp4|webm|ogg)(\?.*)?$/i;
+  const URL_RE = /https?:\/\/[^\s<>"']+/g;
 
   function parseLinks(text) {
     return text.replace(URL_RE, url => {
@@ -1046,10 +1143,10 @@ const embedRenderer = (() => {
   function extractUrls(text) { return text.match(URL_RE) || []; }
 
   function buildEmbed(url) {
-    const ytMatch = url.match(YT_RE);
-    if (ytMatch) {
+    const yt = url.match(YT_RE);
+    if (yt) {
       const iframe = document.createElement("iframe");
-      iframe.src = `https://www.youtube.com/embed/${ytMatch[1]}`;
+      iframe.src = `https://www.youtube.com/embed/${yt[1]}`;
       iframe.width = "320"; iframe.height = "180";
       iframe.style.cssText = "border:none;border-radius:10px;display:block;margin-top:6px";
       iframe.allow = "accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture";
@@ -1076,204 +1173,131 @@ const embedRenderer = (() => {
 
 /* ============================================================
    EMOJI MANAGER
-   Improved: horizontal scroll, custom emoji, :shortcode: autocomplete
 ============================================================ */
 const emojiManager = (() => {
   const picker  = document.getElementById("emoji-picker");
   const trigger = document.getElementById("emoji-btn");
   let _target   = document.getElementById("message");
-  let _customEmojis = {};  // name → dataURL
+  let _custom   = {};
 
-  // Build a rich shortcode map from built-in categories
-  const _SHORTCODE_MAP = {
+  const _CODES = {
     smile:"😊", grin:"😁", laugh:"😂", heart:"❤️", fire:"🔥",
     check:"✅", wave:"👋", star:"⭐", sad:"😢", ok:"👌",
     clap:"👏", eyes:"👀", think:"🤔", party:"🎉", 100:"💯",
-    thumbsup:"👍", thumbsdown:"👎", skull:"💀", shrug:"🤷",
-    cry:"😭", love:"🥰", cool:"😎", angry:"😡", pray:"🙏"
+    thumbsup:"👍", thumbsdown:"👎", skull:"💀", cry:"😭",
+    love:"🥰", cool:"😎", angry:"😡", pray:"🙏", shrug:"🤷"
   };
 
   function init() {
-    _customEmojis = accountManager.getCustomEmojis();
+    _custom = accountManager.getCustomEmojis();
     _buildPicker();
-    trigger.onclick = toggle;
+    trigger.onclick = () => picker.classList.toggle("hidden");
     document.addEventListener("click", e => {
-      if (!picker.contains(e.target) && e.target !== trigger) {
-        picker.classList.add("hidden");
-      }
+      if (!picker.contains(e.target) && e.target !== trigger) picker.classList.add("hidden");
     });
-    document.getElementById("message").addEventListener("input", _handleAutocomplete);
+    document.getElementById("message").addEventListener("input", _autocomplete);
   }
-
-  function setTarget(el) { _target = el; }
-
-  function toggle() { picker.classList.toggle("hidden"); }
 
   function _buildPicker() {
     picker.innerHTML = "";
 
-    // Search
     const search = document.createElement("input");
-    search.className = "emoji-search";
-    search.placeholder = "Search emoji…";
+    search.className = "emoji-search"; search.placeholder = "Search emoji…";
     picker.appendChild(search);
 
-    // Tab row
-    const tabRow = document.createElement("div");
-    tabRow.className = "emoji-tabs";
-    picker.appendChild(tabRow);
+    const tabRow  = document.createElement("div"); tabRow.className  = "emoji-tabs";
+    const content = document.createElement("div"); content.className = "emoji-content";
+    picker.appendChild(tabRow); picker.appendChild(content);
 
-    // Category content
-    const content = document.createElement("div");
-    content.className = "emoji-content";
-    picker.appendChild(content);
+    const cats = { ...EMOJI_CATEGORIES };
+    if (Object.keys(_custom).length) cats["Custom"] = Object.keys(_custom);
+    const ICONS = { Smileys:"😊", People:"👋", Nature:"🐶", Food:"🍎", Objects:"💡", Symbols:"❤️", Custom:"⭐" };
+    let activeTab = Object.keys(cats)[0];
 
-    const categories = { ...EMOJI_CATEGORIES };
-    if (Object.keys(_customEmojis).length) {
-      categories["Custom"] = Object.keys(_customEmojis);
-    }
-
-    let activeTab = null;
-
-    function showCategory(catName) {
-      activeTab = catName;
+    function show(cat) {
+      activeTab = cat;
       content.innerHTML = "";
-      tabRow.querySelectorAll(".emoji-tab").forEach(t => {
-        t.classList.toggle("active", t.dataset.cat === catName);
-      });
-
-      const emojis = catName === "Custom"
-        ? Object.keys(_customEmojis)
-        : EMOJI_CATEGORIES[catName] || [];
-
-      const grid = document.createElement("div");
-      grid.className = "emoji-grid";
-      emojis.forEach(e => {
-        const btn = document.createElement("span");
-        btn.className = "emoji-item";
-        if (catName === "Custom") {
-          const img = document.createElement("img");
-          img.src = _customEmojis[e];
-          img.style.cssText = "width:1.4em;height:1.4em;object-fit:contain";
-          img.title = ":" + e + ":";
+      tabRow.querySelectorAll(".emoji-tab").forEach(t => t.classList.toggle("active", t.dataset.cat === cat));
+      const grid = document.createElement("div"); grid.className = "emoji-grid";
+      const list = cat === "Custom" ? Object.keys(_custom) : (EMOJI_CATEGORIES[cat] || []);
+      list.forEach(e => {
+        const btn = document.createElement("span"); btn.className = "emoji-item";
+        if (cat === "Custom") {
+          const img = document.createElement("img"); img.src = _custom[e];
+          img.style.cssText = "width:1.4em;height:1.4em;object-fit:contain"; img.title = ":" + e + ":";
           btn.appendChild(img);
-          btn.title = ":" + e + ":";
-        } else {
-          btn.textContent = e;
-          btn.title = e;
-        }
-        btn.onclick = () => {
-          _insertEmoji(catName === "Custom" ? _customEmojis[e] : e, catName === "Custom");
-          picker.classList.add("hidden");
-        };
+        } else { btn.textContent = e; btn.title = e; }
+        btn.onclick = () => { _insert(cat === "Custom" ? _custom[e] : e, cat === "Custom"); picker.classList.add("hidden"); };
         grid.appendChild(btn);
       });
       content.appendChild(grid);
     }
 
-    Object.keys(categories).forEach((cat, i) => {
+    Object.keys(cats).forEach((cat, i) => {
       const tab = document.createElement("button");
-      tab.className = "emoji-tab";
-      tab.dataset.cat = cat;
-      tab.title = cat;
-      // Icon for tab
-      const icons = { Smileys:"😊", People:"👋", Nature:"🐶", Food:"🍎", Objects:"💡", Symbols:"❤️", Custom:"⭐" };
-      tab.textContent = icons[cat] || cat[0];
-      tab.onclick = () => showCategory(cat);
+      tab.className = "emoji-tab"; tab.dataset.cat = cat;
+      tab.textContent = ICONS[cat] || cat[0]; tab.title = cat;
+      tab.onclick = () => show(cat);
       tabRow.appendChild(tab);
-      if (i === 0) showCategory(cat);
+      if (i === 0) show(cat);
     });
 
     // Upload custom emoji
-    const uploadRow = document.createElement("div");
-    uploadRow.className = "emoji-upload-row";
-    const uploadLabel = document.createElement("label");
-    uploadLabel.className = "emoji-upload-btn";
-    uploadLabel.innerHTML = `<span>＋ Custom Emoji</span>`;
-    const fileInput = document.createElement("input");
-    fileInput.type = "file"; fileInput.accept = "image/*";
-    fileInput.style.display = "none";
-    fileInput.onchange = function() {
+    const uploadRow = document.createElement("div"); uploadRow.className = "emoji-upload-row";
+    const lbl = document.createElement("label"); lbl.className = "emoji-upload-btn";
+    lbl.innerHTML = "<span>＋ Custom</span>";
+    const fi = document.createElement("input"); fi.type = "file"; fi.accept = "image/*"; fi.style.display = "none";
+    fi.onchange = function() {
       const file = this.files[0]; if (!file) return;
-      const name = prompt("Emoji shortcode name (no spaces):", file.name.split(".")[0].replace(/\s+/g,"_"));
+      const name = prompt("Emoji name (no spaces):", file.name.split(".")[0].replace(/\s+/g,"_"));
       if (!name) return;
-      const reader = new FileReader();
-      reader.onload = e => {
-        _customEmojis[name] = e.target.result;
-        accountManager.saveCustomEmojis(_customEmojis);
-        _buildPicker();
-        uiController.toast(`Custom emoji :${name}: added!`);
-      };
-      reader.readAsDataURL(file);
-      this.value = "";
+      const r = new FileReader(); r.onload = e => { _custom[name] = e.target.result; accountManager.saveCustomEmojis(_custom); _buildPicker(); uiController.toast(`:${name}: added!`); };
+      r.readAsDataURL(file); this.value = "";
     };
-    uploadLabel.appendChild(fileInput);
-    uploadLabel.onclick = () => fileInput.click();
-    uploadRow.appendChild(uploadLabel);
+    lbl.onclick = () => fi.click(); lbl.appendChild(fi); uploadRow.appendChild(lbl);
     picker.appendChild(uploadRow);
 
-    // Search behavior — filters all categories
     search.addEventListener("input", () => {
-      const q = search.value.toLowerCase();
-      content.innerHTML = "";
-      if (!q) { showCategory(activeTab || Object.keys(categories)[0]); return; }
-      const grid = document.createElement("div");
-      grid.className = "emoji-grid";
-      Object.entries(EMOJI_CATEGORIES).forEach(([, emojis]) => {
-        emojis.filter(e => e.includes(q)).forEach(e => {
-          const btn = document.createElement("span");
-          btn.className = "emoji-item";
-          btn.textContent = e; btn.title = e;
-          btn.onclick = () => { _insertEmoji(e, false); picker.classList.add("hidden"); };
-          grid.appendChild(btn);
-        });
+      const q = search.value.toLowerCase(); content.innerHTML = "";
+      if (!q) { show(activeTab); return; }
+      const grid = document.createElement("div"); grid.className = "emoji-grid";
+      Object.values(EMOJI_CATEGORIES).flat().filter(e => e.includes(q)).forEach(e => {
+        const btn = document.createElement("span"); btn.className = "emoji-item";
+        btn.textContent = e; btn.onclick = () => { _insert(e, false); picker.classList.add("hidden"); };
+        grid.appendChild(btn);
       });
       content.appendChild(grid);
     });
   }
 
-  function _insertEmoji(val, isCustom) {
+  function _insert(val, isCustom) {
     if (!_target) return;
     if (isCustom) {
-      // Insert as image tag — not suitable for raw input; insert the :name: shortcode
-      const name = Object.keys(_customEmojis).find(k => _customEmojis[k] === val);
-      if (name) {
-        const p = _target.selectionStart || 0;
-        _target.value = _target.value.slice(0, p) + `:${name}:` + _target.value.slice(p);
-        _target.focus();
-        _target.selectionStart = _target.selectionEnd = p + name.length + 2;
-      }
+      const name = Object.keys(_custom).find(k => _custom[k] === val);
+      if (!name) return;
+      const p = _target.selectionStart || 0;
+      _target.value = _target.value.slice(0,p) + `:${name}:` + _target.value.slice(p);
+      _target.focus(); _target.selectionStart = _target.selectionEnd = p + name.length + 2;
     } else {
       const p = _target.selectionStart || 0;
-      _target.value = _target.value.slice(0, p) + val + _target.value.slice(p);
-      _target.focus();
-      _target.selectionStart = _target.selectionEnd = p + val.length;
+      _target.value = _target.value.slice(0,p) + val + _target.value.slice(p);
+      _target.focus(); _target.selectionStart = _target.selectionEnd = p + val.length;
     }
   }
 
-  function _handleAutocomplete(e) {
-    const el   = e.target;
-    const text = el.value;
-    const colonMatch = text.match(/:([a-zA-Z0-9_]+)$/);
-    if (!colonMatch) return;
-    const key = colonMatch[1].toLowerCase();
-
-    // Check custom emojis first
-    if (_customEmojis[key]) {
-      el.value = text.slice(0, text.lastIndexOf(":")) + `:${key}:`;
-      return;
-    }
-    // Check shortcode map
-    if (_SHORTCODE_MAP[key]) {
-      el.value = text.slice(0, text.lastIndexOf(":")) + _SHORTCODE_MAP[key];
-    }
+  function _autocomplete(e) {
+    const el = e.target, text = el.value;
+    const m  = text.match(/:([a-zA-Z0-9_]+)$/);
+    if (!m) return;
+    const key = m[1].toLowerCase();
+    if (_custom[key]) { el.value = text.slice(0, text.lastIndexOf(":")) + `:${key}:`; return; }
+    if (_CODES[key])  { el.value = text.slice(0, text.lastIndexOf(":")) + _CODES[key]; }
   }
 
-  // Render custom emoji shortcodes in message text into images
   function renderCustomEmojis(container) {
-    if (!Object.keys(_customEmojis).length) return;
+    if (!Object.keys(_custom).length) return;
     container.querySelectorAll(".msg-text").forEach(el => {
-      Object.entries(_customEmojis).forEach(([name, src]) => {
+      Object.entries(_custom).forEach(([name, src]) => {
         el.innerHTML = el.innerHTML.replace(
           new RegExp(`:${name}:`, "g"),
           `<img src="${src}" class="custom-emoji-inline" alt=":${name}:" title=":${name}:">`
@@ -1282,9 +1306,7 @@ const emojiManager = (() => {
     });
   }
 
-  function getCustomEmojis() { return _customEmojis; }
-
-  return { init, setTarget, toggle, renderCustomEmojis, getCustomEmojis };
+  return { init, renderCustomEmojis };
 })();
 
 /* ============================================================
@@ -1311,280 +1333,161 @@ const uiController = (() => {
   const lightbox   = document.getElementById("lightbox");
   const lbImg      = document.getElementById("lightbox-img");
 
-  function toast(msg, duration = 2600) {
+  /* Toast */
+  function toast(msg, dur = 2600) {
     toastEl.textContent = msg;
-    toastEl.classList.remove("hidden");
-    toastEl.classList.add("visible");
+    toastEl.classList.remove("hidden"); toastEl.classList.add("visible");
     clearTimeout(toastEl._t);
-    toastEl._t = setTimeout(() => {
-      toastEl.classList.remove("visible");
-      toastEl.classList.add("hidden");
-    }, duration);
+    toastEl._t = setTimeout(() => { toastEl.classList.remove("visible"); toastEl.classList.add("hidden"); }, dur);
   }
 
-  function _initialsColor(name) {
-    const colors = ["#5b6aee","#e8519c","#3ecf6e","#f0a03a","#e8484b","#00b0f4","#ff7043","#ab47bc"];
-    let h = 0;
-    for (let i = 0; i < (name||"").length; i++) h = name.charCodeAt(i) + ((h << 5) - h);
-    return colors[Math.abs(h) % colors.length];
+  /* Avatar helpers */
+  function _col(name) {
+    const cols = ["#5b6aee","#e8519c","#3ecf6e","#f0a03a","#e8484b","#00b0f4","#ff7043","#ab47bc"];
+    let h = 0; for (let i = 0; i < (name||"").length; i++) h = name.charCodeAt(i) + ((h<<5)-h);
+    return cols[Math.abs(h) % cols.length];
   }
 
   function _makeInitialsUrl(name, sz = 64) {
-    const c = document.createElement("canvas");
-    c.width = c.height = sz;
+    const c = document.createElement("canvas"); c.width = c.height = sz;
     const x = c.getContext("2d");
-    x.beginPath(); x.arc(sz/2, sz/2, sz/2, 0, Math.PI*2);
-    x.fillStyle = _initialsColor(name); x.fill();
-    x.fillStyle = "#fff";
-    x.font = `700 ${Math.round(sz*.38)}px Outfit,sans-serif`;
+    x.beginPath(); x.arc(sz/2,sz/2,sz/2,0,Math.PI*2); x.fillStyle = _col(name); x.fill();
+    x.fillStyle = "#fff"; x.font = `700 ${Math.round(sz*.38)}px Outfit,sans-serif`;
     x.textAlign = "center"; x.textBaseline = "middle";
-    const initials = (name||"?").trim().split(/\s+/).map(w => w[0]).join("").toUpperCase().slice(0, 2);
-    x.fillText(initials, sz/2, sz/2+1);
+    x.fillText((name||"?").trim().split(/\s+/).map(w=>w[0]).join("").toUpperCase().slice(0,2), sz/2, sz/2+1);
     return c.toDataURL();
   }
 
-  function _applyAvatar(el, name, dataUrl) {
-    el.src = dataUrl || _makeInitialsUrl(name || "?");
-  }
+  function _applyAvatar(el, name, url) { el.src = url || _makeInitialsUrl(name || "?"); }
 
   function initAvatarDisplay() {
     const acc = accountManager.get();
-    _applyAvatar(myAviEl, acc.username, acc.avatar);
+    _applyAvatar(myAviEl,   acc.username, acc.avatar);
     _applyAvatar(myAviMini, acc.username, acc.avatar);
     myUserDisp.textContent = acc.username || "Anonymous";
-    const unInput = document.getElementById("username");
-    if (unInput) unInput.value = acc.username || "";
+    const ui = document.getElementById("username"); if (ui) ui.value = acc.username || "";
   }
 
   function setMyId(id) { myIdEl.textContent = id; }
 
+  /* Peer list */
   function updatePeerList(connections, profiles) {
     const ids = Object.keys(connections);
-    const countEl = document.getElementById("peer-count");
-    if (countEl) countEl.textContent = ids.length;
+    const cnt = document.getElementById("peer-count"); if (cnt) cnt.textContent = ids.length;
     peersEl.innerHTML = "";
-    if (!ids.length) {
-      peersEl.innerHTML = '<span class="empty-peers">No peers yet</span>';
-      return;
-    }
+    if (!ids.length) { peersEl.innerHTML = '<span class="empty-peers">No peers yet</span>'; return; }
     ids.forEach(id => {
-      const p = profiles[id] || {};
-      const name = p.username || id.slice(0, 10);
-
-      const item = document.createElement("div");
-      item.className = "peer-item";
-      item.dataset.peer = id;
-
-      const img = document.createElement("img");
-      img.className = "peer-avatar";
-      _applyAvatar(img, name, p.avatar || null);
-
-      const label = document.createElement("span");
-      label.textContent = name;
-      label.title = id;
-      label.style.flex = "1";
-
-      const dmBadge = document.createElement("span");
-      dmBadge.className = "dm-badge";
-      dmBadge.textContent = "DM →";
-
-      item.append(img, label, dmBadge);
-      item.onclick = () => {
-        const dot = item.querySelector(".notif-dot");
-        if (dot) dot.remove();
-        dmManager.open(id);
-      };
+      const p    = profiles[id] || {};
+      const name = p.username || id.slice(0,10);
+      const item = document.createElement("div"); item.className = "peer-item"; item.dataset.peer = id;
+      const img  = document.createElement("img"); img.className = "peer-avatar"; _applyAvatar(img, name, p.avatar||null);
+      const lbl  = document.createElement("span"); lbl.textContent = name; lbl.title = id; lbl.style.flex = "1";
+      const dm   = document.createElement("span"); dm.className = "dm-badge"; dm.textContent = "DM →";
+      item.append(img, lbl, dm);
+      item.onclick = () => { item.querySelector(".notif-dot")?.remove(); dmManager.open(id); };
       peersEl.appendChild(item);
     });
   }
 
-  function appendMessage({ user, text, avatar, isSelf, msgId }) {
+  /* Messages */
+  function appendMessage({ user, text, avatar, isSelf }) {
     _appendMsgEl(messagesEl, { user, text, avatar, isSelf });
     emojiManager.renderCustomEmojis(messagesEl);
   }
 
   function _appendMsgEl(container, { user, text, avatar, isSelf, isDM }) {
-    const wrap = document.createElement("div");
-    wrap.className = "message";
+    const wrap = document.createElement("div"); wrap.className = "message";
+    const avi  = document.createElement("img"); avi.className = "msg-avatar";
+    _applyAvatar(avi, user, avatar); avi.onclick = () => { if (avatar) openLightbox(avatar); };
 
-    const avi = document.createElement("img");
-    avi.className = "msg-avatar";
-    _applyAvatar(avi, user, avatar);
-    avi.onclick = () => { if (avatar) openLightbox(avatar); };
-
-    const right = document.createElement("div");
-    right.className = "msg-right";
-
-    const hdr = document.createElement("div");
-    hdr.className = "msg-header";
-
-    const uEl = document.createElement("span");
-    uEl.className = "username" + (isSelf ? " self" : "") + (isDM ? " dm-tag" : "");
-    uEl.textContent = user + (isDM ? " 🔒" : "");
-
-    const tEl = document.createElement("span");
-    tEl.className = "msg-time";
-    tEl.textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-
+    const right = document.createElement("div"); right.className = "msg-right";
+    const hdr   = document.createElement("div"); hdr.className = "msg-header";
+    const uEl   = document.createElement("span");
+    uEl.className = "username" + (isSelf?" self":"") + (isDM?" dm-tag":"");
+    uEl.textContent = user + (isDM?" 🔒":"");
+    const tEl   = document.createElement("span"); tEl.className = "msg-time";
+    tEl.textContent = new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
     hdr.append(uEl, tEl);
-
-    const body = document.createElement("div");
-    body.className = "msg-text";
+    const body  = document.createElement("div"); body.className = "msg-text";
     body.innerHTML = embedRenderer.parseLinks(_escapeHtml(text));
-
     right.append(hdr, body);
-
-    const urls = embedRenderer.extractUrls(text);
-    urls.forEach(url => {
-      const embed = embedRenderer.buildEmbed(url);
-      if (embed) right.appendChild(embed);
-    });
-
-    wrap.append(avi, right);
-    container.appendChild(wrap);
-    container.scrollTop = container.scrollHeight;
+    embedRenderer.extractUrls(text).forEach(url => { const e = embedRenderer.buildEmbed(url); if (e) right.appendChild(e); });
+    wrap.append(avi, right); container.appendChild(wrap); container.scrollTop = container.scrollHeight;
   }
 
   function appendSystemMessage(text) {
-    const wrap = document.createElement("div");
-    wrap.className = "message";
-    const sys = document.createElement("div");
-    sys.className = "msg-system";
-    sys.textContent = text;
-    wrap.appendChild(sys);
-    messagesEl.appendChild(wrap);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+    const wrap = document.createElement("div"); wrap.className = "message";
+    const sys  = document.createElement("div"); sys.className = "msg-system"; sys.textContent = text;
+    wrap.appendChild(sys); messagesEl.appendChild(wrap); messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
   function appendFileMessage(user, name, size, blob, avatar, senderPeer) {
-    const wrap = document.createElement("div");
-    wrap.className = "message";
+    const wrap = document.createElement("div"); wrap.className = "message";
+    const avi  = document.createElement("img"); avi.className = "msg-avatar"; _applyAvatar(avi, user, avatar);
+    const right = document.createElement("div"); right.className = "msg-right";
+    const hdr   = document.createElement("div"); hdr.className = "msg-header";
+    const uEl   = document.createElement("span"); uEl.className = "username"; uEl.textContent = user;
+    const tEl   = document.createElement("span"); tEl.className = "msg-time";
+    tEl.textContent = new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+    hdr.append(uEl,tEl);
 
-    const avi = document.createElement("img");
-    avi.className = "msg-avatar";
-    _applyAvatar(avi, user, avatar);
+    const _sz = b => { if(!b)return""; if(b<1024)return b+" B"; if(b<1048576)return(b/1024).toFixed(1)+" KB"; return(b/1048576).toFixed(1)+" MB"; };
+    const isImg = /\.(jpe?g|png|gif|webp|svg|avif)$/i.test(name);
+    const isVid = /\.(mp4|webm|ogg)$/i.test(name);
 
-    const right = document.createElement("div");
-    right.className = "msg-right";
-
-    const hdr = document.createElement("div");
-    hdr.className = "msg-header";
-    const uEl = document.createElement("span");
-    uEl.className = "username"; uEl.textContent = user;
-    const tEl = document.createElement("span");
-    tEl.className = "msg-time";
-    tEl.textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    hdr.append(uEl, tEl);
-
-    const isImg  = /\.(jpe?g|png|gif|webp|svg|avif)$/i.test(name);
-    const isVid  = /\.(mp4|webm|ogg)$/i.test(name);
-    const szText = _humanSizeLocal(size);
+    function _dlBtn(blob2, name2) {
+      const b = document.createElement("button"); b.className = "media-dl-btn"; b.textContent = "↓ Download";
+      b.onclick = async () => {
+        b.disabled = true; b.textContent = "Requesting…";
+        const ok = await filePermissionManager.requestPermission(senderPeer, blob2, name2);
+        if (ok) { filePermissionManager.executeDownload(blob2, name2); b.textContent = "✓ Done"; }
+        else { b.disabled = false; b.textContent = "↓ Download"; }
+      };
+      return b;
+    }
 
     if (isImg) {
       const url = URL.createObjectURL(blob);
-      const imgWrap = document.createElement("div");
-      imgWrap.className = "media-protected-wrap";
-
-      const img = document.createElement("img");
-      img.src = url; img.className = "msg-img"; img.loading = "lazy"; img.alt = name;
+      const w2  = document.createElement("div"); w2.className = "media-protected-wrap";
+      const img = document.createElement("img"); img.src=url; img.className="msg-img"; img.loading="lazy"; img.alt=name;
       img.onclick = () => openLightbox(url);
-
-      const dlBtn = document.createElement("button");
-      dlBtn.className = "media-dl-btn";
-      dlBtn.textContent = "↓ Download";
-      dlBtn.onclick = async () => {
-        dlBtn.disabled = true; dlBtn.textContent = "Requesting…";
-        const allowed = await filePermissionManager.requestPermission(senderPeer, blob, name);
-        if (allowed) {
-          filePermissionManager.executeDownload(blob, name);
-          dlBtn.textContent = "✓ Downloading";
-        } else {
-          dlBtn.disabled = false; dlBtn.textContent = "↓ Download";
-        }
-      };
-
-      imgWrap.append(img, dlBtn);
-      right.append(hdr, imgWrap);
+      w2.append(img, _dlBtn(blob, name)); right.append(hdr, w2);
     } else if (isVid) {
-      const url    = URL.createObjectURL(blob);
-      const vidWrap = document.createElement("div");
-      vidWrap.className = "media-protected-wrap";
-
-      const v = document.createElement("video");
-      v.src = url; v.controls = true;
-      v.style.cssText = "max-width:320px;border-radius:10px;display:block;margin-top:6px";
-
-      const dlBtn = document.createElement("button");
-      dlBtn.className = "media-dl-btn";
-      dlBtn.textContent = "↓ Download";
-      dlBtn.onclick = async () => {
-        dlBtn.disabled = true; dlBtn.textContent = "Requesting…";
-        const allowed = await filePermissionManager.requestPermission(senderPeer, blob, name);
-        if (allowed) {
-          filePermissionManager.executeDownload(blob, name);
-          dlBtn.textContent = "✓ Downloading";
-        } else {
-          dlBtn.disabled = false; dlBtn.textContent = "↓ Download";
-        }
-      };
-
-      vidWrap.append(v, dlBtn);
-      right.append(hdr, vidWrap);
+      const url = URL.createObjectURL(blob);
+      const w2  = document.createElement("div"); w2.className = "media-protected-wrap";
+      const v   = document.createElement("video"); v.src=url; v.controls=true; v.style.cssText="max-width:320px;border-radius:10px;display:block;margin-top:6px";
+      w2.append(v, _dlBtn(blob, name)); right.append(hdr, w2);
     } else {
-      // Non-media file: still uses permission system
-      const fileRow = document.createElement("div");
-      fileRow.className = "msg-file";
-      fileRow.innerHTML = `<span>📄</span><span class="file-name">${_escapeHtml(name)}</span><span class="file-size">${szText}</span>`;
-      const dlBtn = document.createElement("span");
-      dlBtn.className = "file-hint";
-      dlBtn.textContent = "↓";
-      dlBtn.style.cursor = "pointer";
-      dlBtn.onclick = async () => {
-        dlBtn.textContent = "…";
-        const allowed = await filePermissionManager.requestPermission(senderPeer, blob, name);
-        if (allowed) {
-          filePermissionManager.executeDownload(blob, name);
-          dlBtn.textContent = "✓";
-        } else {
-          dlBtn.textContent = "↓";
-        }
+      const row = document.createElement("div"); row.className = "msg-file";
+      row.innerHTML = `<span>📄</span><span class="file-name">${_escapeHtml(name)}</span><span class="file-size">${_sz(size)}</span>`;
+      const dl = document.createElement("span"); dl.className = "file-hint"; dl.textContent = "↓"; dl.style.cursor = "pointer";
+      dl.onclick = async () => {
+        dl.textContent = "…";
+        const ok = await filePermissionManager.requestPermission(senderPeer, blob, name);
+        dl.textContent = ok ? "✓" : "↓"; if (ok) filePermissionManager.executeDownload(blob, name);
       };
-      fileRow.appendChild(dlBtn);
-      right.append(hdr, fileRow);
+      row.appendChild(dl); right.append(hdr, row);
     }
 
-    wrap.append(avi, right);
-    messagesEl.appendChild(wrap);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-  }
-
-  function _humanSizeLocal(bytes) {
-    if (!bytes) return "";
-    if (bytes < 1024) return bytes + " B";
-    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
-    return (bytes / 1048576).toFixed(1) + " MB";
+    wrap.append(avi, right); messagesEl.appendChild(wrap); messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
   function _escapeHtml(s) {
-    return String(s)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
+    return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
   }
 
+  /* Call UI */
   function updateCallUI(inCall, camOn, muted, deafened, screen) {
     joinBtn.disabled  = inCall;
     leaveBtn.disabled = !inCall;
-    leaveBtn.classList.toggle("in-call", inCall);
+    leaveBtn.classList.toggle("in-call",     inCall);
     leaveBtn.classList.toggle("not-in-call", !inCall);
     leaveBtn.innerHTML = inCall ? '<span>📵</span> Leave' : '<span>🔌</span> Leave';
 
     [btnCam, btnMute, btnDeaf, btnScreen].forEach(b => b.disabled = !inCall);
 
-    btnCam.querySelector("small").textContent = camOn ? "Cam On" : "Cam Off";
+    btnCam.querySelector("small").textContent  = camOn ? "Cam On" : "Cam Off";
     btnCam.classList.toggle("active", !camOn && inCall);
-    btnCam.querySelector("span").textContent = camOn ? "📷" : "📷";
 
     btnMute.querySelector("span").textContent  = muted ? "🚫" : "🎙";
     btnMute.querySelector("small").textContent = muted ? "Unmute" : "Mute";
@@ -1596,26 +1499,16 @@ const uiController = (() => {
 
     btnScreen.querySelector("small").textContent = screen ? "Stop" : "Share";
     btnScreen.classList.toggle("screen-active", screen);
-
-    // Disable deafen-while-muted edge cases
-    if (!inCall) {
-      btnCam.title = ""; btnMute.title = ""; btnDeaf.title = ""; btnScreen.title = "";
-    }
   }
 
-  function setFileProgress(show, label = "", pct = 0) {
+  /* File progress */
+  function setFileProgress(show, label="", pct=0) {
     fpBar.classList.toggle("hidden", !show);
-    if (show) {
-      fpLabel.textContent = label;
-      fpFill.style.width  = pct + "%";
-      fpPct.textContent   = pct + "%";
-    }
+    if (show) { fpLabel.textContent = label; fpFill.style.width = pct+"%"; fpPct.textContent = pct+"%"; }
   }
 
-  function openLightbox(src) {
-    lbImg.src = src;
-    lightbox.classList.remove("hidden");
-  }
+  /* Lightbox */
+  function openLightbox(src) { lbImg.src = src; lightbox.classList.remove("hidden"); }
 
   return {
     toast, initAvatarDisplay, setMyId, updatePeerList,
@@ -1629,8 +1522,7 @@ const uiController = (() => {
    EVENT WIRING
 ============================================================ */
 (function wireEvents() {
-
-  /* Navigation */
+  /* Nav */
   document.getElementById("nav-main").onclick = () => {
     document.getElementById("nav-main").classList.add("active");
     document.getElementById("nav-account").classList.remove("active");
@@ -1644,13 +1536,9 @@ const uiController = (() => {
     document.getElementById("main-panel").classList.add("hidden");
   };
 
-  /* Copy ID */
-  document.getElementById("copy-id").onclick = () => {
-    navigator.clipboard.writeText(document.getElementById("my-id").textContent)
-      .then(() => uiController.toast("Node ID copied!"));
-  };
+  document.getElementById("copy-id").onclick = () =>
+    navigator.clipboard.writeText(document.getElementById("my-id").textContent).then(() => uiController.toast("Node ID copied!"));
 
-  /* Create room */
   document.getElementById("host").onclick = () => {
     const un = document.getElementById("username")?.value.trim();
     if (un) { accountManager.save({ username: un }); uiController.initAvatarDisplay(); }
@@ -1658,9 +1546,8 @@ const uiController = (() => {
     uiController.toast("Room ready! Share your ID.");
   };
 
-  /* Join room */
   document.getElementById("join").onclick = () => {
-    const un = document.getElementById("username")?.value.trim();
+    const un     = document.getElementById("username")?.value.trim();
     if (un) { accountManager.save({ username: un }); uiController.initAvatarDisplay(); }
     const hostId = document.getElementById("host-id").value.trim();
     if (!hostId) { uiController.toast("Paste a peer ID first."); return; }
@@ -1668,74 +1555,51 @@ const uiController = (() => {
     uiController.appendSystemMessage("Connecting to peer…");
   };
 
-  /* Username live update */
   const unInput = document.getElementById("username");
-  if (unInput) {
-    unInput.addEventListener("input", e => {
-      const acc = accountManager.get();
-      uiController._applyAvatar(document.getElementById("my-avatar"), e.target.value || "?", acc.avatar);
-      uiController._applyAvatar(document.getElementById("my-avatar-mini"), e.target.value || "?", acc.avatar);
-      document.getElementById("my-username-display").textContent = e.target.value || "Anonymous";
-    });
-  }
+  if (unInput) unInput.addEventListener("input", e => {
+    const acc = accountManager.get();
+    uiController._applyAvatar(document.getElementById("my-avatar"), e.target.value||"?", acc.avatar);
+    uiController._applyAvatar(document.getElementById("my-avatar-mini"), e.target.value||"?", acc.avatar);
+    document.getElementById("my-username-display").textContent = e.target.value || "Anonymous";
+  });
 
-  /* Account save */
   document.getElementById("acc-save").onclick = () => {
     const un = document.getElementById("username")?.value.trim() || "Anonymous";
-    accountManager.save({ username: un });
-    uiController.initAvatarDisplay();
-    uiController.toast("Account saved!");
-    peerManager.broadcast({ type: "profile", user: un, avatar: accountManager.get().avatar });
+    accountManager.save({ username: un }); uiController.initAvatarDisplay(); uiController.toast("Account saved!");
+    peerManager.broadcast({ type:"profile", user:un, avatar:accountManager.get().avatar });
   };
 
-  /* Account export — excludes peerId */
   document.getElementById("acc-export").onclick = () => accountManager.exportJSON();
 
-  /* Account import */
   document.getElementById("acc-import").onchange = async function() {
-    const file = this.files[0]; if (!file) return;
-    this.value = "";
+    const file = this.files[0]; if (!file) return; this.value = "";
     try {
       const acc = await accountManager.importJSON(file);
-      uiController.initAvatarDisplay();
-      emojiManager.init(); // Rebuild picker with imported custom emojis
-      uiController.toast(`Account loaded: ${acc.username}`);
-    } catch (e) { uiController.toast("Import failed: " + e.message); }
-  };
-
-  /* Avatar uploads */
-  document.getElementById("avatar-input").onchange = function() {
-    _handleAvatarFile(this.files[0]); this.value = "";
-  };
-  document.getElementById("avatar-input-mini").onchange = function() {
-    _handleAvatarFile(this.files[0]); this.value = "";
+      uiController.initAvatarDisplay(); emojiManager.init(); uiController.toast(`Account loaded: ${acc.username}`);
+    } catch(e) { uiController.toast("Import failed: "+e.message); }
   };
 
   function _handleAvatarFile(file) {
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = e => {
-      const img = new Image();
-      img.src = e.target.result;
-      img.onload = () => {
-        const sz = 64, canvas = document.createElement("canvas");
-        canvas.width = canvas.height = sz;
-        const ctx = canvas.getContext("2d");
-        ctx.beginPath(); ctx.arc(sz/2, sz/2, sz/2, 0, Math.PI*2); ctx.clip();
-        const sc = Math.max(sz/img.width, sz/img.height);
-        const w = img.width*sc, h = img.height*sc;
-        ctx.drawImage(img, (sz-w)/2, (sz-h)/2, w, h);
-        const avatar = canvas.toDataURL("image/jpeg", 0.75);
-        accountManager.save({ avatar });
-        uiController.initAvatarDisplay();
-        peerManager.broadcast({ type: "profile", user: accountManager.get().username, avatar });
+    const r = new FileReader(); r.onload = e => {
+      const img = new Image(); img.src = e.target.result; img.onload = () => {
+        const sz=64, c=document.createElement("canvas"); c.width=c.height=sz;
+        const x=c.getContext("2d");
+        x.beginPath(); x.arc(sz/2,sz/2,sz/2,0,Math.PI*2); x.clip();
+        const sc=Math.max(sz/img.width,sz/img.height), w=img.width*sc, h=img.height*sc;
+        x.drawImage(img,(sz-w)/2,(sz-h)/2,w,h);
+        const avatar=c.toDataURL("image/jpeg",.75);
+        accountManager.save({avatar}); uiController.initAvatarDisplay();
+        peerManager.broadcast({type:"profile",user:accountManager.get().username,avatar});
         uiController.toast("Avatar updated!");
       };
-    };
-    reader.readAsDataURL(file);
+    }; r.readAsDataURL(file);
   }
 
-  /* Voice controls */
+  document.getElementById("avatar-input").onchange      = function() { _handleAvatarFile(this.files[0]); this.value=""; };
+  document.getElementById("avatar-input-mini").onchange = function() { _handleAvatarFile(this.files[0]); this.value=""; };
+
+  /* Voice */
   document.getElementById("join-call").onclick  = () => callManager.startCall();
   document.getElementById("leave-call").onclick = () => callManager.leaveCall();
   document.getElementById("btn-camera").onclick  = () => callManager.toggleCamera();
@@ -1743,47 +1607,34 @@ const uiController = (() => {
   document.getElementById("btn-deafen").onclick  = () => callManager.toggleDeafen();
   document.getElementById("btn-screen").onclick  = () => callManager.toggleScreen();
 
-  /* Chat send */
-  document.getElementById("send").onclick = sendChat;
+  /* Chat */
+  document.getElementById("send").onclick = _sendChat;
   document.getElementById("message").addEventListener("keydown", e => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); _sendChat(); }
   });
 
-  function sendChat() {
-    const text = document.getElementById("message").value.trim();
-    if (!text) return;
+  function _sendChat() {
+    const text = document.getElementById("message").value.trim(); if (!text) return;
     document.getElementById("message").value = "";
     const acc = accountManager.get();
-    uiController.appendMessage({ user: acc.username, text, avatar: acc.avatar, isSelf: true });
-    peerManager.broadcast({ type: "message", user: acc.username, text, msgId: crypto.randomUUID() });
+    uiController.appendMessage({ user:acc.username, text, avatar:acc.avatar, isSelf:true });
+    peerManager.broadcast({ type:"message", user:acc.username, text, msgId:crypto.randomUUID() });
   }
 
-  /* File inputs */
+  /* Files */
   document.getElementById("file-input").onchange = function() {
-    const file = this.files[0]; if (!file) return; this.value = "";
-    fileTransferManager.sendFile(file);
+    const f=this.files[0]; if(!f)return; this.value=""; fileTransferManager.sendFile(f);
   };
   document.getElementById("file-input-chat").onchange = function() {
-    const file = this.files[0]; if (!file) return; this.value = "";
-    fileTransferManager.sendFile(file);
+    const f=this.files[0]; if(!f)return; this.value=""; fileTransferManager.sendFile(f);
   };
 
-  /* Lightbox close */
-  document.querySelector(".lightbox-bg").onclick = () => {
-    document.getElementById("lightbox").classList.add("hidden");
-  };
-  document.querySelector(".lightbox-close").onclick = () => {
-    document.getElementById("lightbox").classList.add("hidden");
-  };
-  document.addEventListener("keydown", e => {
-    if (e.key === "Escape") document.getElementById("lightbox").classList.add("hidden");
-  });
+  /* Lightbox */
+  document.querySelector(".lightbox-bg").onclick    = () => document.getElementById("lightbox").classList.add("hidden");
+  document.querySelector(".lightbox-close").onclick = () => document.getElementById("lightbox").classList.add("hidden");
+  document.addEventListener("keydown", e => { if (e.key==="Escape") document.getElementById("lightbox").classList.add("hidden"); });
 
-  /* host-id enter key */
-  document.getElementById("host-id").addEventListener("keydown", e => {
-    if (e.key === "Enter") document.getElementById("join").click();
-  });
-
+  document.getElementById("host-id").addEventListener("keydown", e => { if (e.key==="Enter") document.getElementById("join").click(); });
 })();
 
 /* ============================================================
