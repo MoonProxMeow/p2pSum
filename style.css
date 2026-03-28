@@ -361,6 +361,82 @@ input,button,select,textarea{font-family:inherit}
 .fs-exit-btn{position:absolute;top:16px;right:20px;background:rgba(255,255,255,.15);border:none;color:#fff;border-radius:6px;padding:6px 12px;font-size:.8rem;cursor:pointer;font-family:var(--font-mono);transition:var(--trans)}
 .fs-exit-btn:hover{background:rgba(255,255,255,.25)}
 
+/* ============================================================ VIEW PANES (chat-view / dm-view) */
+.view-pane{flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:0}
+.view-pane.hidden{display:none!important}
+
+/* ============================================================ SERVER STRIP BADGE */
+.strip-badge{
+  position:absolute;top:-2px;right:-2px;
+  background:var(--accent-red);color:#fff;
+  border-radius:10px;font-size:.52rem;font-family:var(--font-mono);
+  padding:1px 4px;min-width:14px;text-align:center;
+  line-height:1.4;pointer-events:none;
+}
+.strip-badge.hidden{display:none}
+/* Make server-icon position:relative so badge positions correctly */
+.server-icon{position:relative}
+
+/* ============================================================ DM CONVERSATION LIST (sidebar) */
+.dm-conv-list{display:flex;flex-direction:column;gap:2px}
+.dm-empty-hint{
+  font-family:var(--font-mono);font-size:.68rem;color:var(--text-lo);
+  text-align:center;padding:16px 10px;line-height:1.6;
+}
+.dm-conv-item{
+  display:flex;align-items:center;gap:8px;
+  padding:7px 8px;border-radius:var(--radius-sm);
+  cursor:pointer;transition:var(--trans);
+  border:1px solid transparent;
+}
+.dm-conv-item:hover{background:var(--bg-hover);border-color:var(--border)}
+.dm-conv-item.active{background:var(--bg-card);border-color:var(--accent)}
+.dm-conv-avatar{width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0;background:var(--bg-panel)}
+.dm-conv-body{flex:1;min-width:0}
+.dm-conv-name{font-size:.82rem;font-weight:600;color:var(--text-hi);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dm-conv-preview{font-family:var(--font-mono);font-size:.62rem;color:var(--text-lo);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+.dm-conv-meta{flex-shrink:0;display:flex;flex-direction:column;align-items:flex-end;gap:3px}
+.dm-unread-badge{background:var(--accent-red);color:#fff;border-radius:10px;font-size:.55rem;font-family:var(--font-mono);padding:1px 5px;min-width:16px;text-align:center}
+
+/* ============================================================ FRIEND REQUEST TOAST */
+.friend-req-toast{
+  position:fixed;top:16px;right:16px;z-index:4000;
+  background:var(--bg-card);border:1px solid var(--border-hi);
+  border-radius:var(--radius-lg);padding:14px 16px;
+  display:flex;align-items:center;gap:12px;
+  box-shadow:0 12px 40px rgba(0,0,0,.7);
+  max-width:340px;
+  animation:slideDown .2s var(--ease);
+}
+@keyframes slideDown{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:none}}
+.friend-req-toast.hidden{display:none}
+.frq-avatar{width:40px;height:40px;border-radius:50%;object-fit:cover;border:2px solid var(--accent);flex-shrink:0}
+.frq-body{flex:1;min-width:0}
+.frq-label{font-family:var(--font-mono);font-size:.58rem;letter-spacing:2px;color:var(--accent-amber);margin-bottom:2px}
+.frq-name{font-weight:700;font-size:.88rem;color:var(--text-hi);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.frq-btns{display:flex;gap:6px;flex-shrink:0}
+
+/* ============================================================ FRIEND ONLINE DOT */
+.friend-online-dot{
+  width:8px;height:8px;border-radius:50%;background:var(--text-lo);flex-shrink:0;
+}
+.friend-online-dot.online{background:var(--accent-green);box-shadow:0 0 0 2px rgba(62,207,110,.25)}
+
+/* ============================================================ FRIEND ITEM ACTIONS */
+.friend-item-actions{display:flex;gap:4px;align-items:center;flex-shrink:0}
+
+/* ============================================================ REACTION PICKER POPUP */
+.reaction-picker-popup{
+  background:var(--bg-card);border:1px solid var(--border-hi);
+  border-radius:var(--radius-lg);padding:8px;
+  display:flex;flex-wrap:wrap;gap:2px;
+  max-width:220px;
+  box-shadow:0 12px 40px rgba(0,0,0,.7);
+  animation:slideUp .15s var(--ease);
+}
+.rp-item{font-size:1.3rem;padding:4px;border-radius:6px;cursor:pointer;transition:var(--trans)}
+.rp-item:hover{background:var(--bg-hover)}
+
 /* ============================================================ SCREENSHOT WATERMARK */
 @media print{
   body::before{

@@ -16,7 +16,7 @@
   <div class="drm-content">
     <div class="drm-icon">⚠</div>
     <div class="drm-title">Recording Detected</div>
-    <div class="drm-sub">This application has detected a screen capture event.<br>Media has been suspended for privacy.</div>
+    <div class="drm-sub">Screen capture detected. Media suspended for privacy.</div>
   </div>
 </div>
 
@@ -27,51 +27,34 @@
   <img id="lightbox-img" src="" alt="">
 </div>
 
-<!-- Emoji picker -->
+<!-- Global emoji picker (positioned by JS) -->
 <div id="emoji-picker" class="emoji-picker hidden"></div>
 
 <!-- Profile popup -->
 <div id="profile-popup" class="profile-popup hidden">
-  <button class="profile-popup-close">✕</button>
+  <button class="profile-popup-close" id="pp-close">✕</button>
   <div class="profile-popup-inner">
     <img id="pp-avatar" class="pp-avatar" src="" alt="">
     <div class="pp-info">
       <div id="pp-name" class="pp-name"></div>
-      <div id="pp-id" class="pp-id"></div>
-      <div id="pp-friend-status" class="pp-friend-status"></div>
+      <div id="pp-id"   class="pp-id"></div>
+      <div id="pp-status" class="pp-friend-status"></div>
     </div>
-    <div class="pp-actions">
-      <button id="pp-dm" class="btn btn-primary btn-sm">💬 DM</button>
-      <button id="pp-add-friend" class="btn btn-secondary btn-sm">➕ Add Friend</button>
-    </div>
+    <div class="pp-actions" id="pp-actions"></div>
   </div>
 </div>
 
-<!-- DM Panel -->
-<div id="dm-panel" class="dm-panel hidden">
-  <div class="dm-header">
-    <img id="dm-avatar" class="dm-avatar-img" src="" alt="">
-    <span id="dm-name" class="dm-name"></span>
-    <button id="dm-close" class="dm-close-btn">✕</button>
+<!-- Incoming friend-request toast -->
+<div id="friend-req-toast" class="friend-req-toast hidden">
+  <img id="frq-avatar" class="frq-avatar" src="" alt="">
+  <div class="frq-body">
+    <div class="frq-label">Friend Request</div>
+    <div id="frq-name"  class="frq-name"></div>
   </div>
-  <div id="dm-messages" class="messages dm-messages"></div>
-  <div class="input-bar">
-    <label class="file-label-inline" title="Send image">
-      <span>🖼</span>
-      <input type="file" id="dm-img-input" accept="image/*" style="display:none">
-    </label>
-    <input id="dm-input" placeholder="Direct message…" autocomplete="off">
-    <button id="dm-send" class="send-btn">↑</button>
+  <div class="frq-btns">
+    <button id="frq-accept"  class="btn btn-primary btn-sm">Accept</button>
+    <button id="frq-decline" class="btn btn-secondary btn-sm">Decline</button>
   </div>
-</div>
-
-<!-- Settings Panel -->
-<div id="settings-panel" class="settings-panel hidden">
-  <div class="settings-header">
-    <span class="settings-title">⚙ Settings</span>
-    <button id="settings-close" class="dm-close-btn">✕</button>
-  </div>
-  <div class="settings-body" id="settings-body"></div>
 </div>
 
 <!-- File send confirm dialog -->
@@ -82,8 +65,8 @@
     <div id="fcd-filename" class="perm-msg"></div>
     <div id="fcd-preview" style="margin:8px 0"></div>
     <div class="fcd-toggles">
-      <label class="toggle-row"><input type="checkbox" id="fcd-onetime"> One-time view (no download)</label>
-      <label class="toggle-row"><input type="checkbox" id="fcd-spoiler"> Spoiler (hidden until clicked)</label>
+      <label class="toggle-row"><input type="checkbox" id="fcd-onetime"> One-time view</label>
+      <label class="toggle-row"><input type="checkbox" id="fcd-spoiler"> Spoiler</label>
       <div class="toggle-row">
         <span>Expiry:</span>
         <select id="fcd-expiry" class="fcd-select">
@@ -96,21 +79,22 @@
       </div>
     </div>
     <div class="perm-btns">
-      <button id="fcd-send" class="btn btn-primary btn-sm">Send</button>
+      <button id="fcd-send"   class="btn btn-primary btn-sm">Send</button>
       <button id="fcd-cancel" class="btn btn-secondary btn-sm">Cancel</button>
     </div>
   </div>
 </div>
 
-<!-- Push-to-talk overlay indicator -->
+<!-- PTT indicator -->
 <div id="ptt-indicator" class="ptt-indicator hidden">🎙 Transmitting…</div>
 
 <div id="app">
   <!-- SERVER STRIP -->
   <div class="server-strip">
-    <div class="server-icon active" title="Chat" id="nav-main">💬</div>
+    <div class="server-icon active" title="Chat"             id="nav-main">💬</div>
+    <div class="server-icon"        title="Direct Messages"  id="nav-dms">✉<span id="nav-dms-badge" class="strip-badge hidden"></span></div>
     <div class="server-divider"></div>
-    <div class="server-icon" title="Friends" id="nav-friends">👥</div>
+    <div class="server-icon" title="Friends" id="nav-friends">👥<span id="nav-friends-badge" class="strip-badge hidden"></span></div>
     <div class="server-icon" title="Account" id="nav-account">👤</div>
     <div class="server-icon" title="Settings" id="nav-settings">⚙</div>
     <div class="server-divider"></div>
@@ -139,36 +123,52 @@
         </div>
       </div>
       <div class="account-btns">
-        <button id="acc-save" class="btn btn-primary btn-sm">Save Account</button>
+        <button id="acc-save"   class="btn btn-primary btn-sm">Save Account</button>
         <button id="acc-export" class="btn btn-secondary btn-sm">Export JSON</button>
-        <label class="btn btn-secondary btn-sm" style="cursor:pointer">Import JSON<input type="file" id="acc-import" accept=".json" style="display:none"></label>
-        <button id="acc-burn" class="btn btn-sm" style="background:var(--accent-red);color:#fff">🔥 Burn Account</button>
+        <label  class="btn btn-secondary btn-sm" style="cursor:pointer">Import JSON<input type="file" id="acc-import" accept=".json" style="display:none"></label>
+        <button id="acc-burn"   class="btn btn-sm" style="background:var(--accent-red);color:#fff">🔥 Burn Account</button>
       </div>
     </div>
 
     <!-- Friends panel -->
     <div id="friends-panel" class="account-panel hidden">
       <div class="account-section-label">FRIENDS</div>
+
+      <!-- Pending incoming requests -->
+      <div id="friend-requests-section" style="display:none;margin-bottom:10px">
+        <div class="acc-label" style="color:var(--accent-amber)">PENDING REQUESTS <span id="req-count" class="peer-count" style="background:var(--accent-amber);color:#000"></span></div>
+        <div id="friend-requests-list" class="peers-list" style="margin-top:4px"></div>
+      </div>
+
       <div class="friends-key-box">
         <div class="acc-label">YOUR FRIEND KEY</div>
         <div id="friend-key-display" class="friend-key-display">—</div>
-        <button id="refresh-friend-key" class="btn btn-secondary btn-sm" style="margin-top:6px">↻ Refresh Key</button>
-        <button id="copy-friend-key" class="btn btn-secondary btn-sm" style="margin-top:4px">⎘ Copy Key</button>
+        <button id="copy-friend-key"    class="btn btn-secondary btn-sm" style="margin-top:6px">⎘ Copy Key</button>
+        <button id="refresh-friend-key" class="btn btn-secondary btn-sm" style="margin-top:4px">↻ Refresh Key</button>
       </div>
+
       <div style="margin-top:8px">
-        <div class="acc-label">ADD FRIEND BY KEY</div>
+        <div class="acc-label">ADD BY KEY (auto-accept)</div>
         <div class="join-row">
           <input id="add-friend-input" class="join-input" placeholder="Paste friend key…">
           <button id="add-friend-btn" class="btn btn-accent">+</button>
         </div>
       </div>
+
       <div style="margin-top:10px">
-        <div class="account-section-label">SAVED FRIENDS</div>
+        <div class="account-section-label">FRIENDS <span id="online-friends-count" class="peer-count">0 online</span></div>
         <div id="friends-list" class="peers-list" style="margin-top:6px"></div>
       </div>
     </div>
 
-    <!-- Main panel -->
+    <!-- DMs sidebar list -->
+    <div id="dms-panel" class="account-panel hidden">
+      <div class="account-section-label">DIRECT MESSAGES</div>
+      <div id="dm-conversations-list" class="dm-conv-list"></div>
+      <div id="dm-empty-hint" class="dm-empty-hint">No conversations yet.<br>Open a DM from a peer or friend.</div>
+    </div>
+
+    <!-- Main/chat panel -->
     <div id="main-panel">
       <div class="id-box">
         <div class="id-label">YOUR NODE ID</div>
@@ -201,32 +201,36 @@
     </div>
   </div>
 
-  <!-- MAIN AREA -->
+  <!-- MAIN CHAT AREA -->
   <div class="chat-area">
-    <div class="toolbar">
+
+    <!-- Toolbar -->
+    <div class="toolbar" id="main-toolbar">
       <div class="toolbar-left">
-        <span class="toolbar-channel"># general</span>
-        <span class="toolbar-desc">End-to-end encrypted · Full mesh · Per-message ratchet</span>
+        <span class="toolbar-channel" id="toolbar-channel"># general</span>
+        <span class="toolbar-desc"    id="toolbar-desc">End-to-end encrypted · Full mesh · Per-message ratchet</span>
       </div>
       <div class="toolbar-right">
-        <button id="ptt-btn" class="icon-btn ptt-btn" disabled title="Push-to-talk (hold Space)"><span>📢</span><small>PTT</small></button>
-        <button id="join-call" class="vc-btn vc-join"><span>🎙</span> Voice</button>
+        <button id="ptt-btn"    class="icon-btn ptt-btn" disabled><span>📢</span><small>PTT</small></button>
+        <button id="join-call"  class="vc-btn vc-join"><span>🎙</span> Voice</button>
         <button id="leave-call" class="vc-btn vc-leave" disabled><span>📵</span> Leave</button>
         <div class="vc-sep"></div>
-        <button id="btn-camera"  class="icon-btn" disabled><span>📷</span><small>Cam</small></button>
-        <button id="btn-mute"    class="icon-btn" disabled><span>🎙</span><small>Mute</small></button>
-        <button id="btn-deafen"  class="icon-btn" disabled><span>🔊</span><small>Deaf</small></button>
-        <button id="btn-noise"   class="icon-btn" disabled title="Voice isolation"><span>🎛</span><small>Noise</small></button>
-        <button id="btn-screen"  class="icon-btn" disabled><span>🖥</span><small>Share</small></button>
-        <label  class="icon-btn file-label" title="Send File">
+        <button id="btn-camera" class="icon-btn" disabled><span>📷</span><small>Cam</small></button>
+        <button id="btn-mute"   class="icon-btn" disabled><span>🎙</span><small>Mute</small></button>
+        <button id="btn-deafen" class="icon-btn" disabled><span>🔊</span><small>Deaf</small></button>
+        <button id="btn-noise"  class="icon-btn" disabled><span>🎛</span><small>Noise</small></button>
+        <button id="btn-screen" class="icon-btn" disabled><span>🖥</span><small>Share</small></button>
+        <label  class="icon-btn file-label">
           <span>📎</span><small>File</small>
           <input type="file" id="file-input" style="display:none">
         </label>
       </div>
     </div>
 
+    <!-- Video grid -->
     <div id="video-grid" class="video-grid hidden"></div>
 
+    <!-- File progress -->
     <div id="file-progress-bar" class="file-progress-bar hidden">
       <div class="fp-inner">
         <span id="fp-label" class="fp-label">Sending…</span>
@@ -235,24 +239,52 @@
       </div>
     </div>
 
-    <div id="messages" class="messages"></div>
-
-    <div class="input-bar">
-      <button id="emoji-btn" class="emoji-trigger" title="Emoji">😊</button>
-      <div class="input-wrap">
-        <input id="message" placeholder="Message #general…" autocomplete="off">
+    <!-- Group chat view -->
+    <div id="chat-view" class="view-pane">
+      <div id="messages" class="messages"></div>
+      <div class="input-bar">
+        <button id="emoji-btn" class="emoji-trigger">😊</button>
+        <div class="input-wrap">
+          <input id="message" placeholder="Message #general…" autocomplete="off">
+        </div>
+        <label class="file-label-inline">
+          <span>📎</span>
+          <input type="file" id="file-input-chat" style="display:none">
+        </label>
+        <button id="send" class="send-btn">↑</button>
       </div>
-      <label class="file-label-inline" title="Attach file">
-        <span>📎</span>
-        <input type="file" id="file-input-chat" style="display:none">
-      </label>
-      <button id="send" class="send-btn">↑</button>
     </div>
+
+    <!-- DM conversation view -->
+    <div id="dm-view" class="view-pane hidden">
+      <div id="dm-messages" class="messages"></div>
+      <div class="input-bar">
+        <button id="dm-emoji-btn" class="emoji-trigger">😊</button>
+        <label class="file-label-inline" title="Send image">
+          <span>🖼</span>
+          <input type="file" id="dm-img-input" accept="image/*" style="display:none">
+        </label>
+        <div class="input-wrap">
+          <input id="dm-input" placeholder="Send a message…" autocomplete="off">
+        </div>
+        <button id="dm-send" class="send-btn">↑</button>
+      </div>
+    </div>
+
+  </div><!-- /chat-area -->
+
+  <!-- Settings slide-over -->
+  <div id="settings-panel" class="settings-panel hidden">
+    <div class="settings-header">
+      <span class="settings-title">⚙ Settings</span>
+      <button id="settings-close" class="dm-close-btn">✕</button>
+    </div>
+    <div class="settings-body" id="settings-body"></div>
   </div>
-</div>
+
+</div><!-- /app -->
 
 <div id="toast" class="toast hidden"></div>
-
 <span style="position:fixed;opacity:0;pointer-events:none;user-select:none;font-size:0" aria-hidden="true">©NexTalk-P2P-2025</span>
 
 <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js"></script>
