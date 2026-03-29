@@ -437,6 +437,18 @@ input,button,select,textarea{font-family:inherit}
 .rp-item{font-size:1.3rem;padding:4px;border-radius:6px;cursor:pointer;transition:var(--trans)}
 .rp-item:hover{background:var(--bg-hover)}
 
+/* has-unread: general chat has messages while you're in a DM */
+#nav-main.has-unread::after{
+  content:'';position:absolute;bottom:2px;right:2px;
+  width:8px;height:8px;border-radius:50%;
+  background:var(--accent-hot);
+  box-shadow:0 0 0 2px var(--bg-void);
+}
+
+/* media-toggle-btn (inline media show/hide) */
+.media-toggle-btn{font-family:var(--font-mono);font-size:.62rem;color:var(--text-lo);background:none;border:1px solid var(--border);border-radius:4px;padding:2px 6px;cursor:pointer;transition:var(--trans);margin-top:4px;display:inline-block}
+.media-toggle-btn:hover{color:var(--accent);border-color:var(--accent)}
+
 /* ============================================================ SCREENSHOT WATERMARK */
 @media print{
   body::before{

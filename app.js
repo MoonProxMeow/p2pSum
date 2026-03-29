@@ -401,6 +401,8 @@ const peerManager = (() => {
       await encryptionManager.init();
       uiController.initAvatarDisplay();
       friendsManager.init();
+      // Scan peers already connected (shouldn't happen at open, but belt-and-suspenders)
+      friendsManager.reconcileConnectedPeers();
       _reconnectFriends();
     });
     _peer.on("connection", conn => _setup(conn));
@@ -409,7 +411,12 @@ const peerManager = (() => {
   }
 
   function _reconnectFriends() {
-    accountManager.getFriends().forEach(f => { if (f.lastPeerId) connectTo(f.lastPeerId); });
+    const myId = _myId;
+    accountManager.getFriends().forEach(f => {
+      if (!f.lastPeerId || f.lastPeerId === myId) return;
+      // Attempt connection; if the peer is offline this will fail silently via _teardown
+      connectTo(f.lastPeerId);
+    });
   }
 
   function getId()          { return _myId; }
@@ -499,7 +506,13 @@ const peerManager = (() => {
         if (Array.isArray(data.peers)) data.peers.forEach(id => connectTo(id));
         break;
       case "message":
+        // Always append to #general — DMs are a separate channel
         uiController.appendMessage({user:data.user, text:data.text, avatar:_profiles[pid]?.avatar||null, isSelf:false, msgId:data.msgId});
+        // If user is currently viewing a DM, show a dot on the #general nav icon
+        if (dmManager.getActivePid()) {
+          const navMain = document.getElementById("nav-main");
+          navMain?.classList.add("has-unread");
+        }
         break;
       case "message-edit":
         uiController.editMessage(data.msgId, data.newText);
@@ -544,10 +557,12 @@ const peerManager = (() => {
   }
 
   function _teardown(pid) {
+    const hadSession = encryptionManager.hasSession(pid);
     delete _conns[pid]; _pending.delete(pid);
     encryptionManager.removeSession(pid);
     uiController.updatePeerList(_conns, _profiles);
-    uiController.appendSystemMessage("A peer left the mesh");
+    // Only announce departure if an encrypted session was actually established
+    if (hadSession) uiController.appendSystemMessage("A peer left the mesh");
     callManager.removePeerCall(pid);
     friendsManager.onPeerDisconnected(pid);
   }
@@ -952,9 +967,17 @@ const fileTransferManager = (() => {
     arrays.forEach(a => { merged.set(a, off); off += a.length; });
     const blob    = new Blob([merged], {type: meta.mimeType || "application/octet-stream"});
     const profile = peerManager.getProfile(pid);
-    uiController.appendFileMessage(profile.username||"Peer", meta.name, meta.size, blob,
-                                   profile.avatar||null, pid,
-                                   {oneTime:meta.oneTime, spoiler:meta.spoiler, expiry:meta.expiry});
+    // Route file to DM container if the sender is the currently open DM peer
+    // This ensures files sent in DM context appear in the DM view, not #general
+    const isDMContext = dmManager.getActivePid() === pid || dmManager.hasDMWith(pid);
+    if (isDMContext) {
+      // Render as a DM image/file inside the DM conversation
+      dmManager.receiveFile(pid, meta, blob);
+    } else {
+      uiController.appendFileMessage(profile.username||"Peer", meta.name, meta.size, blob,
+                                     profile.avatar||null, pid,
+                                     {oneTime:meta.oneTime, spoiler:meta.spoiler, expiry:meta.expiry});
+    }
     delete _in[data.id];
   }
   return { sendFile, receiveMeta, receiveChunk, receiveEnd };
@@ -1005,8 +1028,10 @@ const dmManager = (() => {
     _unread[pid] = 0;
     document.getElementById("chat-view").classList.add("hidden");
     dmView.classList.remove("hidden");
+    // Always re-fetch profile in case username updated since last open
     const profile = peerManager.getProfile(pid);
-    document.getElementById("toolbar-channel").textContent = "@ " + (profile.username || pid.slice(0,8));
+    const name    = profile.username || pid.slice(0,8);
+    document.getElementById("toolbar-channel").textContent = "@ " + name;
     document.getElementById("toolbar-desc").textContent    = "End-to-end encrypted · Direct message";
     dmMsgs.innerHTML = "";
     (_hist[pid] || []).forEach(m => m.isImg ? _renderImg(m) : _renderDM(m));
@@ -1022,6 +1047,8 @@ const dmManager = (() => {
     document.getElementById("chat-view").classList.remove("hidden");
     document.getElementById("toolbar-channel").textContent = "# general";
     document.getElementById("toolbar-desc").textContent    = "End-to-end encrypted · Full mesh · Per-message ratchet";
+    // Clear any general-chat unread indicator
+    document.getElementById("nav-main")?.classList.remove("has-unread");
   }
 
   async function send() {
@@ -1134,9 +1161,47 @@ const dmManager = (() => {
     if (_activePid === pid) document.getElementById("toolbar-channel").textContent = "@ " + (profile.username || pid.slice(0,8));
     _renderConvList();
   }
+  function receiveFile(fromPid, meta, blob) {
+    const profile = peerManager.getProfile(fromPid);
+    const isImg   = /\.(jpe?g|png|gif|webp|svg|avif)$/i.test(meta.name);
+    if (isImg) {
+      // Convert to base64 and render inline like a DM image
+      const reader = new FileReader();
+      reader.onload = e => {
+        const b64     = e.target.result.split(",")[1];
+        const mimeType = meta.mimeType || "image/jpeg";
+        const msg = { user:profile.username||"Peer", b64, mimeType, isSelf:false, avatar:profile.avatar||null, isImg:true };
+        _store(fromPid, msg);
+        if (_activePid === fromPid) { _renderImg(msg); }
+        else { _unread[fromPid] = (_unread[fromPid]||0)+1; uiController.toast(`🖼 File from ${profile.username||"Peer"}`); _notifDot(fromPid); }
+        _renderConvList(); _updateDMBadge();
+      };
+      reader.readAsDataURL(blob);
+    } else {
+      // Non-image: render a file pill inside the DM conversation
+      const wrap  = document.createElement("div"); wrap.className = "message";
+      const avi   = document.createElement("img"); avi.className = "msg-avatar";
+      uiController._applyAvatar(avi, profile.username||"Peer", profile.avatar||null);
+      const right = document.createElement("div"); right.className = "msg-right";
+      const hdr   = document.createElement("div"); hdr.className = "msg-header";
+      const u     = document.createElement("span"); u.className = "username dm-tag"; u.textContent = (profile.username||"Peer") + " 🔒";
+      const t     = document.createElement("span"); t.className = "msg-time"; t.textContent = new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+      hdr.append(u, t);
+      const sz    = meta.size < 1024 ? meta.size+" B" : meta.size < 1048576 ? (meta.size/1024).toFixed(1)+" KB" : (meta.size/1048576).toFixed(1)+" MB";
+      const row   = document.createElement("div"); row.className = "msg-file";
+      row.innerHTML = `<span>📄</span><span class="file-name">${uiController._escapeHtml(meta.name)}</span><span class="file-size">${sz}</span>`;
+      const dl = document.createElement("span"); dl.className = "file-hint"; dl.textContent = "↓"; dl.style.cursor = "pointer";
+      dl.onclick = async () => { dl.textContent="…"; const ok=await filePermissionManager.requestPermission(fromPid,blob,meta.name); dl.textContent=ok?"✓":"↓"; if(ok)filePermissionManager.executeDownload(blob,meta.name); };
+      row.appendChild(dl);
+      right.append(hdr, row); wrap.append(avi, right);
+      if (_activePid === fromPid) { dmMsgs.appendChild(wrap); dmMsgs.scrollTop = dmMsgs.scrollHeight; }
+      else { _unread[fromPid] = (_unread[fromPid]||0)+1; uiController.toast(`📄 File from ${profile.username||"Peer"}: ${meta.name}`); _notifDot(fromPid); }
+      _renderConvList(); _updateDMBadge();
+    }
+  }
   function hasDMWith(pid)  { return !!_hist[pid]; }
   function getActivePid()  { return _activePid; }
-  return { open, closeActiveDM, send, receiveMessage, receiveImage, onPeerProfileUpdate, hasDMWith, getActivePid, _renderConvList };
+  return { open, closeActiveDM, send, receiveMessage, receiveImage, receiveFile, onPeerProfileUpdate, hasDMWith, getActivePid, _renderConvList };
 })();
 
 /* ============================================================ FRIENDS MANAGER
@@ -1172,13 +1237,30 @@ const friendsManager = (() => {
 
   function onPeerConnected(pid, profile) {
     if (!profile.friendKey) { renderFriends(); return; }
-    const match = accountManager.getFriends().find(f => f.friendKey === profile.friendKey);
+    const friends = accountManager.getFriends();
+    const match = friends.find(f => f.friendKey === profile.friendKey);
     if (match) accountManager.updateFriendPeerId(match.friendKey, pid);
     renderFriends();
   }
+
+  // Called at startup: scan all currently connected peers to resolve any friend matches
+  // that arrived before friendsManager was fully initialised
+  function reconcileConnectedPeers() {
+    const conns    = peerManager.getConnections();
+    const profiles = Object.fromEntries(Object.keys(conns).map(pid => [pid, peerManager.getProfile(pid)]));
+    Object.entries(profiles).forEach(([pid, profile]) => {
+      if (profile.friendKey) onPeerConnected(pid, profile);
+    });
+  }
   function onPeerDisconnected(pid) { renderFriends(); }
 
+  let _renderPending = false;
   function renderFriends() {
+    if (_renderPending) return;
+    _renderPending = true;
+    requestAnimationFrame(() => { _renderPending = false; _doRenderFriends(); });
+  }
+  function _doRenderFriends() {
     const list = document.getElementById("friends-list"); if (!list) return;
     const friends = accountManager.getFriends();
     const conns   = peerManager.getConnections();
@@ -1325,8 +1407,8 @@ const friendsManager = (() => {
     });
   }
 
-  return { init, renderFriends, onPeerConnected, onPeerDisconnected, sendRequest,
-           handleIncomingRequest, handleAccepted, handleDeclined, hasOutboundRequest };
+  return { init, renderFriends, onPeerConnected, onPeerDisconnected, reconcileConnectedPeers,
+           sendRequest, handleIncomingRequest, handleAccepted, handleDeclined, hasOutboundRequest };
 })();
 
 /* ============================================================ EMBED RENDERER */
@@ -1598,7 +1680,8 @@ const uiController = (() => {
   const fpPct      = document.getElementById("fp-pct");
   const lightbox   = document.getElementById("lightbox");
   const lbImg      = document.getElementById("lightbox-img");
-  const _msgEls    = {};
+  const _msgEls    = {};    // general chat: msgId → wrap
+  const _dmMsgEls  = {};    // DM chat: msgId → wrap
 
   function toast(msg, dur = 2600) {
     toastEl.textContent = msg; toastEl.classList.remove("hidden"); toastEl.classList.add("visible");
@@ -1650,6 +1733,25 @@ const uiController = (() => {
   function updatePeerList(conns, profiles) {
     const ids = Object.keys(conns);
     const cnt = document.getElementById("peer-count"); if (cnt) cnt.textContent = ids.length;
+
+    // Check if the peer set has changed — if not, just update existing items in place
+    const existingItems = Array.from(peersEl.querySelectorAll(".peer-item"));
+    const existingIds   = existingItems.map(el => el.dataset.peer);
+    const sameSet = ids.length === existingIds.length && ids.every(id => existingIds.includes(id));
+
+    if (sameSet) {
+      // Fast path: just update avatar/name on existing DOM nodes
+      ids.forEach(id => {
+        const item = peersEl.querySelector(`.peer-item[data-peer="${id}"]`); if (!item) return;
+        const p    = profiles[id] || {};
+        const name = p.username || id.slice(0,10);
+        const img  = item.querySelector(".peer-avatar"); if (img) _applyAvatar(img, name, p.avatar||null);
+        const lbl  = item.querySelector("span:not(.dm-badge):not(.notif-dot)"); if (lbl) { lbl.textContent = name; lbl.title = id; }
+      });
+      return;
+    }
+
+    // Full rebuild needed (peers joined or left)
     peersEl.innerHTML = "";
     if (!ids.length) { peersEl.innerHTML = '<span class="empty-peers">No peers yet</span>'; return; }
     ids.forEach(id => {
@@ -1673,7 +1775,15 @@ const uiController = (() => {
 
   function _appendMsgEl(container, {user, text, avatar, isSelf, isDM, msgId}) {
     const wrap = document.createElement("div"); wrap.className = "message";
-    if (msgId) { wrap.dataset.msgId = msgId; _msgEls[msgId] = wrap; }
+    if (msgId) {
+      wrap.dataset.msgId = msgId;
+      // Store in the right map so reactions/edits target the correct element
+      if (isDM || container === document.getElementById("dm-messages")) {
+        _dmMsgEls[msgId] = wrap;
+      } else {
+        _msgEls[msgId] = wrap;
+      }
+    }
     const avi = document.createElement("img"); avi.className = "msg-avatar"; _applyAvatar(avi, user, avatar);
     avi.onclick = () => { if (avatar) openLightbox(avatar); };
     const right = document.createElement("div"); right.className = "msg-right";
@@ -1739,7 +1849,8 @@ const uiController = (() => {
   }
 
   function editMessage(msgId, newText) {
-    const wrap = _msgEls[msgId]; if (!wrap) return;
+    // Check both general and DM maps
+    const wrap = _msgEls[msgId] || _dmMsgEls[msgId]; if (!wrap) return;
     const body = wrap.querySelector(".msg-text"); if (!body) return;
     body.innerHTML = embedRenderer.parseLinks(_escapeHtml(newText));
     const hdr = wrap.querySelector(".msg-header"); if (!hdr) return;
@@ -1748,7 +1859,7 @@ const uiController = (() => {
   }
 
   function handleReaction(data) {
-    const wrap = _msgEls[data.msgId]; if (!wrap) return;
+    const wrap = _msgEls[data.msgId] || _dmMsgEls[data.msgId]; if (!wrap) return;
     const rr   = wrap.querySelector(".msg-reactions"); if (!rr) return;
     _applyReaction(rr, data.emoji, false, data.msgId);
   }
@@ -2024,7 +2135,8 @@ function _szGlobal(b) { if(!b)return"";if(b<1024)return b+" B";if(b<1048576)retu
     const acc   = accountManager.get();
     const msgId = crypto.randomUUID();
     uiController.appendMessage({user:acc.username, text, avatar:acc.avatar, isSelf:true, msgId});
-    peerManager.broadcast({type:"message", user:acc.username, text, msgId});
+    // channel:"general" lets receivers distinguish group chat from DM packets
+    peerManager.broadcast({type:"message", channel:"general", user:acc.username, text, msgId});
   }
 
   // File send
