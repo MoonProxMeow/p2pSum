@@ -12,9 +12,9 @@
 <body>
 
 <!-- DRM overlay -->
-<div id="drm-overlay" class="drm-overlay hidden" role="alertdialog" aria-hidden="true" aria-label="Recording Detected">
+<div id="drm-overlay" class="drm-overlay hidden">
   <div class="drm-content">
-    <div class="drm-icon" aria-hidden="true">⚠</div>
+    <div class="drm-icon">⚠</div>
     <div class="drm-title">Recording Detected</div>
     <div class="drm-sub">Screen capture detected. Media suspended for privacy.</div>
   </div>
@@ -86,7 +86,7 @@
 </div>
 
 <!-- PTT indicator -->
-<div id="ptt-indicator" class="ptt-indicator hidden" role="status" aria-live="assertive" aria-label="Push-to-talk active — transmitting">🎙 Transmitting…</div>
+<div id="ptt-indicator" class="ptt-indicator hidden">🎙 Transmitting…</div>
 
 <div id="app">
   <!-- SERVER STRIP -->
@@ -98,7 +98,7 @@
     <div class="server-icon" title="Account" id="nav-account">👤</div>
     <div class="server-icon" title="Settings" id="nav-settings">⚙</div>
     <div class="server-divider"></div>
-    <div class="server-icon emergency-btn" title="Emergency Disconnect" id="emergency-disconnect" role="button" aria-label="Emergency Disconnect — closes all connections">☠</div>
+    <div class="server-icon emergency-btn" title="Emergency Disconnect" id="emergency-disconnect">☠</div>
   </div>
 
   <!-- SIDEBAR -->
@@ -173,7 +173,7 @@
       <div class="id-box">
         <div class="id-label">YOUR NODE ID</div>
         <div id="my-id" class="id-value">connecting…</div>
-        <button id="copy-id" class="copy-btn" title="Copy ID" aria-label="Copy Node ID to clipboard">⎘</button>
+        <button id="copy-id" class="copy-btn" title="Copy ID">⎘</button>
       </div>
       <div class="my-profile-mini">
         <label class="avatar-wrap-mini" title="Click to set avatar">
@@ -284,7 +284,7 @@
 
 </div><!-- /app -->
 
-<div id="toast" class="toast hidden" role="status" aria-live="polite" aria-atomic="true"></div>
+<div id="toast" class="toast hidden"></div>
 
 <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js"></script>
 <script src="app.js"></script>

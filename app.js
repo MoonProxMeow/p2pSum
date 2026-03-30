@@ -506,14 +506,12 @@ const peerManager = (() => {
         if (Array.isArray(data.peers)) data.peers.forEach(id => connectTo(id));
         break;
       case "message":
-        // Only route to #general if channel is explicitly "general" or absent (legacy clients)
-        if (!data.channel || data.channel === "general") {
-          uiController.appendMessage({user:data.user, text:data.text, avatar:_profiles[pid]?.avatar||null, isSelf:false, msgId:data.msgId});
-          // If user is currently viewing a DM, show a dot on the #general nav icon
-          if (dmManager.getActivePid()) {
-            const navMain = document.getElementById("nav-main");
-            navMain?.classList.add("has-unread");
-          }
+        // Always append to #general — DMs are a separate channel
+        uiController.appendMessage({user:data.user, text:data.text, avatar:_profiles[pid]?.avatar||null, isSelf:false, msgId:data.msgId});
+        // If user is currently viewing a DM, show a dot on the #general nav icon
+        if (dmManager.getActivePid()) {
+          const navMain = document.getElementById("nav-main");
+          navMain?.classList.add("has-unread");
         }
         break;
       case "message-edit":
@@ -567,11 +565,6 @@ const peerManager = (() => {
     if (hadSession) uiController.appendSystemMessage("A peer left the mesh");
     callManager.removePeerCall(pid);
     friendsManager.onPeerDisconnected(pid);
-    // If the disconnected peer is the active DM, update the toolbar to reflect offline status
-    if (dmManager.getActivePid() === pid) {
-      const toolbarDesc = document.getElementById("toolbar-desc");
-      if (toolbarDesc) toolbarDesc.textContent = "End-to-end encrypted · Direct message · ⚠ Peer offline";
-    }
   }
 
   async function _enc(conn, obj) {
@@ -706,9 +699,7 @@ const callManager = (() => {
         _ls.getAudioTracks().forEach(t => t.enabled = true);
         document.getElementById("ptt-indicator")?.classList.remove("hidden");
         document.getElementById("ptt-btn")?.classList.add("ptt-active");
-        // Prevent page scroll on spacebar; prevent browser shortcuts on other keys
-        e.preventDefault();
-        e.stopPropagation();
+        if (key === " ") e.preventDefault();
       }
     };
     _pttUp = e => {
@@ -719,9 +710,8 @@ const callManager = (() => {
         document.getElementById("ptt-btn")?.classList.remove("ptt-active");
       }
     };
-    // passive:false so we can call preventDefault() in _pttDown
-    document.addEventListener("keydown", _pttDown, { passive: false });
-    document.addEventListener("keyup",   _pttUp,   { passive: true  });
+    document.addEventListener("keydown", _pttDown);
+    document.addEventListener("keyup",   _pttUp);
   }
   function refreshPTT()      { if (_inCall) _setupPTT(); }
   function refreshMuteState(){ if (_ls) _ls.getAudioTracks().forEach(t => { t.enabled = !_muted && !_deafened; }); }
@@ -885,17 +875,7 @@ const callManager = (() => {
   }
   function applyDRMBlackout(active) {
     document.querySelectorAll(".video-wrap").forEach(w => w.classList.toggle("drm-black", active));
-    const overlay = document.getElementById("drm-overlay");
-    if (!overlay) return;
-    overlay.classList.toggle("hidden", !active);
-    overlay.setAttribute("aria-hidden", String(!active));
-    overlay.setAttribute("role", "alertdialog");
-    if (active) {
-      overlay.setAttribute("aria-live", "assertive");
-      overlay.setAttribute("aria-label", "Recording Detected — Screen capture suspended for privacy");
-    } else {
-      overlay.removeAttribute("aria-live");
-    }
+    document.getElementById("drm-overlay")?.classList.toggle("hidden", !active);
   }
   return { isInCall, startCall, callPeer, handleIncomingCall, removePeerCall, leaveCall,
            toggleCamera, toggleMute, toggleDeafen, toggleNoise, toggleScreen, stopScreen,
@@ -981,22 +961,17 @@ const fileTransferManager = (() => {
   function receiveEnd(data, pid) {
     const entry = _in[data.id]; if (!entry) return;
     const {meta, chunks} = entry;
-    // Verify we have all expected chunks before assembling
-    const expectedChunks = data.totalChunks || chunks.length;
-    for (let i = 0; i < expectedChunks; i++) {
-      if (!chunks[i]) { console.warn("File transfer: missing chunk", i, "of", expectedChunks); }
-    }
-    const validChunks = chunks.filter(Boolean);
-    const arrays = validChunks.map(b64 => Uint8Array.from(atob(b64), c => c.charCodeAt(0)));
+    const arrays = chunks.map(b64 => Uint8Array.from(atob(b64), c => c.charCodeAt(0)));
     const total  = arrays.reduce((n, a) => n + a.length, 0);
     const merged = new Uint8Array(total); let off = 0;
     arrays.forEach(a => { merged.set(a, off); off += a.length; });
     const blob    = new Blob([merged], {type: meta.mimeType || "application/octet-stream"});
     const profile = peerManager.getProfile(pid);
-    // Route file to DM container only if we have an active DM open with this sender,
-    // OR if we have an existing DM history with them (not just any peer)
-    const isDMContext = dmManager.hasDMWith(pid);
+    // Route file to DM container if the sender is the currently open DM peer
+    // This ensures files sent in DM context appear in the DM view, not #general
+    const isDMContext = dmManager.getActivePid() === pid || dmManager.hasDMWith(pid);
     if (isDMContext) {
+      // Render as a DM image/file inside the DM conversation
       dmManager.receiveFile(pid, meta, blob);
     } else {
       uiController.appendFileMessage(profile.username||"Peer", meta.name, meta.size, blob,
@@ -1034,11 +1009,6 @@ const dmManager = (() => {
 
   dmImgInput.addEventListener("change", async function() {
     const f = this.files[0]; if (!f || !_activePid) return; this.value = "";
-    const conns = peerManager.getConnections();
-    if (!conns[_activePid] || !conns[_activePid].open) {
-      uiController.toast("⚠ Peer disconnected — image not sent.");
-      return;
-    }
     // Always strip metadata
     const file = await imageProcessor.stripMetadata(f);
     const reader = new FileReader();
@@ -1062,11 +1032,7 @@ const dmManager = (() => {
     const profile = peerManager.getProfile(pid);
     const name    = profile.username || pid.slice(0,8);
     document.getElementById("toolbar-channel").textContent = "@ " + name;
-    const conns = peerManager.getConnections();
-    const isOnline = !!(conns[pid] && conns[pid].open);
-    document.getElementById("toolbar-desc").textContent = isOnline
-      ? "End-to-end encrypted · Direct message"
-      : "End-to-end encrypted · Direct message · ⚠ Peer offline";
+    document.getElementById("toolbar-desc").textContent    = "End-to-end encrypted · Direct message";
     dmMsgs.innerHTML = "";
     (_hist[pid] || []).forEach(m => m.isImg ? _renderImg(m) : _renderDM(m));
     dmMsgs.scrollTop = dmMsgs.scrollHeight;
@@ -1087,11 +1053,6 @@ const dmManager = (() => {
 
   async function send() {
     const text = dmInput.value.trim(); if (!text || !_activePid) return;
-    const conns = peerManager.getConnections();
-    if (!conns[_activePid] || !conns[_activePid].open) {
-      uiController.toast("⚠ Peer disconnected — message not sent.");
-      return;
-    }
     dmInput.value = "";
     const acc = accountManager.get();
     const msg = {type:"dm", user:acc.username, text, avatar:acc.avatar, msgId:crypto.randomUUID(), ts:Date.now()};
@@ -1262,16 +1223,7 @@ const friendsManager = (() => {
     });
     document.getElementById("copy-friend-key")?.addEventListener("click", () => {
       const k = accountManager.get().friendKey;
-      if (!k) { uiController.toast("No friend key to copy."); return; }
-      const btn = document.getElementById("copy-friend-key");
-      navigator.clipboard.writeText(k).then(() => {
-        uiController.toast("Friend key copied!");
-        if (btn) {
-          const prev = btn.textContent;
-          btn.textContent = "✓ Copied"; btn.style.color = "var(--accent-green)";
-          setTimeout(() => { btn.textContent = prev; btn.style.color = ""; }, 1800);
-        }
-      }).catch(() => uiController.toast("Copy failed — select and copy manually."));
+      if (k) navigator.clipboard.writeText(k).then(() => uiController.toast("Friend key copied!"));
     });
     document.getElementById("add-friend-btn")?.addEventListener("click", () => {
       const inp = document.getElementById("add-friend-input");
@@ -1606,7 +1558,7 @@ const settingsUI = (() => {
   const panel = document.getElementById("settings-panel");
   const body  = document.getElementById("settings-body");
 
-  function open()  { panel.classList.remove("hidden"); requestAnimationFrame(() => { panel.style.transform = "translateX(0)"; }); _render(); }
+  function open()  { _render(); panel.classList.remove("hidden"); panel.style.transform = "translateX(0)"; }
   function close() { panel.style.transform = "translateX(100%)"; setTimeout(() => { panel.classList.add("hidden"); panel.style.transform = ""; }, 260); }
 
   // FIX: clean toggle builder — no broken setAttribute call
@@ -1732,10 +1684,7 @@ const uiController = (() => {
   const _dmMsgEls  = {};    // DM chat: msgId → wrap
 
   function toast(msg, dur = 2600) {
-    toastEl.textContent = msg;
-    toastEl.setAttribute("role", "status");
-    toastEl.setAttribute("aria-live", "polite");
-    toastEl.classList.remove("hidden"); toastEl.classList.add("visible");
+    toastEl.textContent = msg; toastEl.classList.remove("hidden"); toastEl.classList.add("visible");
     clearTimeout(toastEl._t); toastEl._t = setTimeout(() => { toastEl.classList.remove("visible"); toastEl.classList.add("hidden"); }, dur);
   }
   function _col(n) { const cols=["#5b6aee","#e8519c","#3ecf6e","#f0a03a","#e8484b","#00b0f4","#ff7043","#ab47bc"]; let h=0; for(let i=0;i<(n||"").length;i++) h=n.charCodeAt(i)+((h<<5)-h); return cols[Math.abs(h)%cols.length]; }
@@ -1767,31 +1716,18 @@ const uiController = (() => {
     const isFriend = profile.friendKey && accountManager.isFriend(profile.friendKey);
     document.getElementById("pp-status").textContent = isFriend ? "✅ Friend" : "";
     const actions = document.getElementById("pp-actions"); actions.innerHTML = "";
-
-    const dmBtn = document.createElement("button");
-    dmBtn.className = "btn btn-primary btn-sm"; dmBtn.textContent = "💬 Message";
-    dmBtn.setAttribute("tabindex", "0");
-    dmBtn.onclick = () => { pp.classList.add("hidden"); dmManager.open(pid); };
-    actions.appendChild(dmBtn);
-
+    const dmBtn = document.createElement("button"); dmBtn.className = "btn btn-primary btn-sm"; dmBtn.textContent = "💬 Message";
+    dmBtn.onclick = () => { pp.classList.add("hidden"); dmManager.open(pid); }; actions.appendChild(dmBtn);
     if (!isFriend) {
       const hasPending = friendsManager.hasOutboundRequest(pid);
       const frBtn = document.createElement("button"); frBtn.className = "btn btn-secondary btn-sm";
       frBtn.textContent = hasPending ? "⏳ Requested" : "➕ Add Friend"; frBtn.disabled = hasPending;
-      frBtn.setAttribute("tabindex", "0");
       frBtn.onclick = () => { friendsManager.sendRequest(pid); frBtn.textContent = "⏳ Requested"; frBtn.disabled = true; };
       actions.appendChild(frBtn);
     }
-
     const rect = anchorEl?.getBoundingClientRect();
-    if (rect) {
-      const top  = Math.min(rect.bottom + 8, window.innerHeight - 280);
-      const left = Math.min(rect.left, window.innerWidth - 280);
-      pp.style.top = top + "px"; pp.style.left = left + "px";
-    }
+    if (rect) { const top = Math.min(rect.bottom+8, window.innerHeight-280); pp.style.top=top+"px"; pp.style.left=Math.min(rect.left, window.innerWidth-280)+"px"; }
     pp.classList.remove("hidden");
-    // Focus the first button for keyboard users
-    setTimeout(() => actions.querySelector("button")?.focus(), 60);
   }
 
   function updatePeerList(conns, profiles) {
@@ -2080,7 +2016,6 @@ function _szGlobal(b) { if(!b)return"";if(b<1024)return b+" B";if(b<1048576)retu
 
   document.getElementById("nav-main")?.addEventListener("click", () => {
     _nav("nav-main"); document.getElementById("main-panel")?.classList.remove("hidden");
-    document.getElementById("nav-main")?.classList.remove("has-unread");
     if (dmManager.getActivePid()) dmManager.closeActiveDM();
   });
   document.getElementById("nav-dms")?.addEventListener("click", () => {
@@ -2101,40 +2036,21 @@ function _szGlobal(b) { if(!b)return"";if(b<1024)return b+" B";if(b<1048576)retu
   });
 
   // Profile popup close
-  document.getElementById("pp-close")?.addEventListener("click", () => {
-    document.getElementById("profile-popup")?.classList.add("hidden");
-  });
+  document.getElementById("pp-close")?.addEventListener("click", () => document.getElementById("profile-popup")?.classList.add("hidden"));
   document.addEventListener("click", e => {
     const pp = document.getElementById("profile-popup");
-    if (!pp || pp.classList.contains("hidden")) return;
-    // Don't double-close when clicking the X button
-    if (e.target.id === "pp-close") return;
-    if (!pp.contains(e.target)) pp.classList.add("hidden");
-  }, true);
+    if (pp && !pp.classList.contains("hidden") && !pp.contains(e.target)) pp.classList.add("hidden");
+  });
 
   // Emergency
-  let _emergencyLock = false;
   document.getElementById("emergency-disconnect")?.addEventListener("click", () => {
-    if (_emergencyLock) return;
-    if (!confirm("☠ Emergency disconnect? This will close all connections and clear active call.")) return;
-    _emergencyLock = true;
-    peerManager.emergencyDisconnect();
-    setTimeout(() => { _emergencyLock = false; }, 3000);
+    if (!confirm("☠ Emergency disconnect?")) return; peerManager.emergencyDisconnect();
   });
 
   // Copy ID
-  document.getElementById("copy-id")?.addEventListener("click", () => {
-    const idText = document.getElementById("my-id").textContent;
-    const btn = document.getElementById("copy-id");
-    navigator.clipboard.writeText(idText).then(() => {
-      uiController.toast("Node ID copied!");
-      if (btn) {
-        const prev = btn.textContent;
-        btn.textContent = "✓"; btn.style.color = "var(--accent-green)";
-        setTimeout(() => { btn.textContent = prev; btn.style.color = ""; }, 1800);
-      }
-    }).catch(() => uiController.toast("Copy failed — select and copy manually."));
-  });
+  document.getElementById("copy-id")?.addEventListener("click", () =>
+    navigator.clipboard.writeText(document.getElementById("my-id").textContent).then(() => uiController.toast("Node ID copied!"))
+  );
 
   // Room create / join
   document.getElementById("host")?.addEventListener("click", () => {
@@ -2215,16 +2131,10 @@ function _szGlobal(b) { if(!b)return"";if(b<1024)return b+" B";if(b<1048576)retu
   document.getElementById("message")?.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); _sendChat(); } });
   function _sendChat() {
     const text = document.getElementById("message").value.trim(); if (!text) return;
-    const conns = peerManager.getConnections();
-    const hasPeers = Object.values(conns).some(c => c.open && encryptionManager.hasSession(c.peer));
     document.getElementById("message").value = "";
     const acc   = accountManager.get();
     const msgId = crypto.randomUUID();
     uiController.appendMessage({user:acc.username, text, avatar:acc.avatar, isSelf:true, msgId});
-    if (!hasPeers) {
-      uiController.appendSystemMessage("⚠ No connected peers — message shown locally only.");
-      return;
-    }
     // channel:"general" lets receivers distinguish group chat from DM packets
     peerManager.broadcast({type:"message", channel:"general", user:acc.username, text, msgId});
   }
@@ -2240,7 +2150,6 @@ function _szGlobal(b) { if(!b)return"";if(b<1024)return b+" B";if(b<1048576)retu
   document.addEventListener("keydown", e => {
     if (e.key === "Escape") {
       document.getElementById("lightbox")?.classList.add("hidden");
-      document.getElementById("profile-popup")?.classList.add("hidden");
       document.querySelectorAll(".reaction-picker-popup").forEach(p => p.remove());
     }
   });

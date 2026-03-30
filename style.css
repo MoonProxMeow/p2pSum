@@ -22,18 +22,12 @@ input,button,select,textarea{font-family:inherit}
 .sidebar,.toolbar,.server-strip,.input-bar{user-select:none}
 
 /* ============================================================ DRM */
-.drm-overlay{position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.97);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(20px);transition:opacity .2s ease}
+.drm-overlay{position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.97);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(20px)}
 .drm-overlay.hidden{display:none}
 .drm-content{text-align:center;max-width:340px}
 .drm-icon{font-size:3rem;margin-bottom:12px;opacity:.6}
 .drm-title{font-size:1.3rem;font-weight:700;color:var(--accent-amber);margin-bottom:8px}
 .drm-sub{font-size:.85rem;color:var(--text-mid);line-height:1.6}
-
-/* ============================================================ ACCESSIBILITY — keyboard focus */
-:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:var(--radius-sm)}
-button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-/* Suppress focus ring for mouse/touch users */
-:focus:not(:focus-visible){outline:none}
 
 /* ============================================================ LIGHTBOX */
 .lightbox{position:fixed;inset:0;z-index:8000;display:flex;align-items:center;justify-content:center}
@@ -136,10 +130,10 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
 .toggle-switch input:checked + .toggle-slider::before{transform:translateX(18px);background:#fff}
 
 /* ============================================================ PTT indicator */
-.ptt-indicator{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--accent-red);color:#fff;font-family:var(--font-mono);font-size:.78rem;padding:6px 16px;border-radius:30px;z-index:3000;animation:pulse-ptt .6s infinite alternate;display:flex;align-items:center;gap:6px;box-shadow:0 4px 20px rgba(232,72,75,.5)}
+.ptt-indicator{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--accent-red);color:#fff;font-family:var(--font-mono);font-size:.78rem;padding:6px 16px;border-radius:30px;z-index:3000;animation:pulse-ptt .6s infinite alternate}
 .ptt-indicator.hidden{display:none}
 @keyframes pulse-ptt{from{box-shadow:0 0 0 0 rgba(232,72,75,.6)}to{box-shadow:0 0 0 8px rgba(232,72,75,0)}}
-.ptt-btn.ptt-active{background:var(--accent-red)!important;border-color:var(--accent-red)!important;color:#fff!important;box-shadow:0 0 12px rgba(232,72,75,.5)!important}
+.ptt-btn.ptt-active{background:var(--accent-red)!important;border-color:var(--accent-red)!important;color:#fff!important}
 
 /* Emergency button */
 .emergency-btn{background:var(--accent-red)!important;border-color:var(--accent-red)!important;color:#fff!important}
