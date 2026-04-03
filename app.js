@@ -505,15 +505,38 @@ const peerManager = (() => {
       case "mesh-peers":
         if (Array.isArray(data.peers)) data.peers.forEach(id => connectTo(id));
         break;
-      case "message":
-        // Always append to #general — DMs are a separate channel
-        uiController.appendMessage({user:data.user, text:data.text, avatar:_profiles[pid]?.avatar||null, isSelf:false, msgId:data.msgId});
-        // If user is currently viewing a DM, show a dot on the #general nav icon
+      case "message": {
+
+        // ignore non-general packets
+        if (data.channel && data.channel !== "general") break;
+
+        // prevent duplicate renders
+        if (!window.__seenGeneralMsgs)
+          window.__seenGeneralMsgs = new Set();
+
+        if (data.msgId && window.__seenGeneralMsgs.has(data.msgId))
+          break;
+
+        if (data.msgId)
+          window.__seenGeneralMsgs.add(data.msgId);
+
+        uiController.appendMessage({
+          user: data.user,
+          text: data.text,
+          avatar: _profiles[pid]?.avatar || null,
+          isSelf: false,
+          msgId: data.msgId,
+          ts: data.ts || Date.now()
+        });
+
+        // unread indicator when viewing DMs
         if (dmManager.getActivePid()) {
           const navMain = document.getElementById("nav-main");
           navMain?.classList.add("has-unread");
         }
+
         break;
+      }
       case "message-edit":
         uiController.editMessage(data.msgId, data.newText);
         break;
@@ -2130,14 +2153,36 @@ function _szGlobal(b) { if(!b)return"";if(b<1024)return b+" B";if(b<1048576)retu
   document.getElementById("send")?.addEventListener("click", _sendChat);
   document.getElementById("message")?.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); _sendChat(); } });
   function _sendChat() {
-    const text = document.getElementById("message").value.trim(); if (!text) return;
-    document.getElementById("message").value = "";
-    const acc   = accountManager.get();
-    const msgId = crypto.randomUUID();
-    uiController.appendMessage({user:acc.username, text, avatar:acc.avatar, isSelf:true, msgId});
-    // channel:"general" lets receivers distinguish group chat from DM packets
-    peerManager.broadcast({type:"message", channel:"general", user:acc.username, text, msgId});
-  }
+  const input = document.getElementById("message");
+  const text = input.value.trim();
+  if (!text) return;
+
+  input.value = "";
+
+  const acc   = accountManager.get();
+  const msgId = crypto.randomUUID();
+  const ts    = Date.now();
+
+  // local render
+  uiController.appendMessage({
+    user: acc.username,
+    text,
+    avatar: acc.avatar,
+    isSelf: true,
+    msgId,
+    ts
+  });
+
+  // broadcast to mesh
+  peerManager.broadcast({
+    type: "message",
+    channel: "general",
+    user: acc.username,
+    text,
+    msgId,
+    ts
+  });
+}
 
   // File send
   function _sendWithDialog(file) { showFileSendDialog(file, opts => fileTransferManager.sendFile(file, opts)); }
