@@ -223,21 +223,29 @@ const encryptionManager = (() => {
 
   // FIX: reset both counters to clean state on every (re)handshake
   async function setSession(pid, dhBytes, sigBytes) {
-    // Derive independent send/recv keys from the shared ECDH root
     const root = await _rootKey(dhBytes);
+    const myId = peerManager.getId();
 
-    // Send chain
-    _send[pid] = { key: root, counter: 0 };
-
-    // Recv chain (different HKDF info string → different key stream)
     const raw  = await crypto.subtle.exportKey("raw", root);
     const base = await crypto.subtle.importKey("raw", raw, "HKDF", false, ["deriveKey"]);
-    const rk   = await crypto.subtle.deriveKey(
-      {name:"HKDF", hash:"SHA-256", salt:new Uint8Array(32), info:new TextEncoder().encode("NexTalk-recv-v1")},
+
+    // Deterministic sorting guarantees Peer A's send key aligns with Peer B's recv key
+    const infoSend = myId < pid ? "NexTalk-Stream-A" : "NexTalk-Stream-B";
+    const infoRecv = myId < pid ? "NexTalk-Stream-B" : "NexTalk-Stream-A";
+
+    const sendKey = await crypto.subtle.deriveKey(
+      {name:"HKDF", hash:"SHA-256", salt:new Uint8Array(32), info:new TextEncoder().encode(infoSend)},
       base, {name:"AES-GCM",length:256}, true, ["encrypt","decrypt"]
     );
-    // Always reset lastCounter to -1 so a rehandshake never causes replay errors
-    _recv[pid]    = { key: rk, lastCounter: -1 };
+    const recvKey = await crypto.subtle.deriveKey(
+      {name:"HKDF", hash:"SHA-256", salt:new Uint8Array(32), info:new TextEncoder().encode(infoRecv)},
+      base, {name:"AES-GCM",length:256}, true, ["encrypt","decrypt"]
+    );
+
+    // Reset counters to clean state so rehandshakes don't cause replay errors
+    _send[pid] = { key: sendKey, counter: 0 };
+    _recv[pid] = { key: recvKey, lastCounter: -1 };
+    
     _sigKeys[pid] = await crypto.subtle.importKey("raw", new Uint8Array(sigBytes), {name:"ECDSA",namedCurve:"P-256"}, false, ["verify"]);
 
     _scheduleRH(pid);
