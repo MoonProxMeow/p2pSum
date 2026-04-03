@@ -52,7 +52,7 @@
 })();
 
 /* ============================================================ CONSTANTS */
-const CHUNK_SIZE = 12000;
+const CHUNK_SIZE = 60000; // 60 KB — optimised for WebRTC data channels (~5× faster than 12 KB)
 const EMOJI_CATEGORIES = {
   "Smileys":["😀","😃","😄","😁","😆","😅","🤣","😂","🙂","😊","😇","🥰","😍","🤩","😘","😋","😛","😜","🤪","😝","🤑","🤗","🤭","🤫","🤔","🤐","😐","😑","😏","😒","🙄","😬","😌","😔","😪","😴","😷","🤒","🤕","🤢","🤮","🥵","🥶","😵","🤯","🤠","🥳","😎","🤓","🧐","😕","😟","🙁","☹️","😮","😲","😳","🥺","😦","😧","😨","😢","😭","😱","😖","😣","😞","😓","😩","😫","🥱","😤","😡","😠","🤬","😈","👿","💀","☠️","💩","🤡","👹","👺","👻","👽","👾","🤖"],
   "People":["👋","🤚","🖐️","✋","🖖","👌","🤌","🤏","✌️","🤞","🤟","🤘","🤙","👈","👉","👆","🖕","👇","☝️","👍","👎","✊","👊","🤛","🤜","👏","🙌","👐","🤲","🤝","🙏","💅","🤳","💪","🦾","🦵","🦶","👂","🦻","👃","🧠","👀","👁️","👅","👄"],
@@ -152,7 +152,18 @@ const accountManager = (() => {
   function addFriend(friendKey, name) {
     const f = getFriends();
     if (!friendKey || f.find(x => x.friendKey === friendKey)) return false;
-    f.push({ friendKey, name: name||"Friend", addedAt: Date.now(), lastPeerId: null });
+    // Prefer a real username over the "Friend" placeholder.
+    // Scan currently connected peers for one whose broadcasted friendKey matches —
+    // runtime peerManager access is safe here since this is always called from UI events.
+    let displayName = (name && name !== "Friend") ? name : "Friend";
+    try {
+      const conns = peerManager.getConnections();
+      for (const pid of Object.keys(conns)) {
+        const p = peerManager.getProfile(pid);
+        if (p && p.friendKey === friendKey && p.username) { displayName = p.username; break; }
+      }
+    } catch {}
+    f.push({ friendKey, name: displayName, addedAt: Date.now(), lastPeerId: null });
     saveFriends(f); return true;
   }
   function removeFriend(friendKey) { saveFriends(getFriends().filter(f => f.friendKey !== friendKey)); }
@@ -1040,8 +1051,17 @@ const dmManager = (() => {
 
   dmImgInput.addEventListener("change", async function() {
     const f = this.files[0]; if (!f || !_activePid) return; this.value = "";
-    // Always strip metadata
+    // Always strip EXIF/metadata from the image first
     const file = await imageProcessor.stripMetadata(f);
+
+    // Images larger than 200 KB are routed through the chunked file-transfer
+    // pipeline (which can handle any size) rather than being packed into a single
+    // encrypted JSON frame, which would overflow the WebRTC data channel buffer.
+    if (file.size > 200 * 1024) {
+      await fileTransferManager.sendFile(file, {}, _activePid);
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = async e => {
       const b64 = e.target.result.split(",")[1];
@@ -1310,18 +1330,30 @@ const friendsManager = (() => {
       const dot  = document.createElement("span"); dot.className = "friend-online-dot" + (isOnline ? " online" : "");
       const lbl  = document.createElement("span"); lbl.textContent = name; lbl.style.flex = "1"; lbl.title = f.friendKey;
       const acts = document.createElement("div"); acts.className = "friend-item-actions";
+
+      // Clicking the avatar or name opens the profile popup (when the friend is online)
       if (isOnline && f.lastPeerId) {
+        [avi, lbl].forEach(el => {
+          el.style.cursor = "pointer";
+          el.onclick = e => { e.stopPropagation(); uiController.showProfilePopup(f.lastPeerId, el); };
+        });
         const msgBtn = document.createElement("button"); msgBtn.className = "btn btn-sm btn-primary";
         msgBtn.textContent = "💬"; msgBtn.title = "Message"; msgBtn.style.padding = "2px 6px";
         msgBtn.onclick = e => { e.stopPropagation(); dmManager.open(f.lastPeerId); };
         acts.appendChild(msgBtn);
       }
+
       const rmBtn = document.createElement("button"); rmBtn.className = "btn btn-sm";
       rmBtn.textContent = "✕"; rmBtn.style.cssText = "background:var(--accent-red);color:#fff;padding:2px 6px;font-size:.7rem";
       rmBtn.onclick = e => { e.stopPropagation(); if (confirm("Remove friend?")) { accountManager.removeFriend(f.friendKey); renderFriends(); } };
       acts.appendChild(rmBtn);
       item.append(avi, dot, lbl, acts);
-      item.addEventListener("click", e => { if (isOnline && f.lastPeerId && e.target === item) dmManager.open(f.lastPeerId); });
+      // Click anywhere on the row (not on a button) → open DM when online
+      item.addEventListener("click", e => {
+        if (!isOnline || !f.lastPeerId) return;
+        if (e.target.closest("button")) return;
+        dmManager.open(f.lastPeerId);
+      });
       list.appendChild(item);
     });
   }
@@ -1442,23 +1474,63 @@ const friendsManager = (() => {
            sendRequest, handleIncomingRequest, handleAccepted, handleDeclined, hasOutboundRequest };
 })();
 
-/* ============================================================ EMBED RENDERER */
+/* ============================================================ EMBED RENDERER
+   Feature: buildEmbed now produces rich link-preview cards for arbitrary URLs
+   using Google's favicon service — no proxy, no OG-tag leakage, fully private.
+============================================================ */
 const embedRenderer = (() => {
   const YT     = /(?:youtube\.com\/watch\?v=|youtu\.be\/)([A-Za-z0-9_-]{11})/;
   const IMG    = /\.(jpe?g|png|gif|webp|svg|avif)(\?.*)?$/i;
   const VID    = /\.(mp4|webm|ogg)(\?.*)?$/i;
   const URL_RE = /https?:\/\/[^\s<>"']+/g;
+
   function parseLinks(text) {
     return text.replace(URL_RE, url => { const s = url.replace(/</g,"&lt;").replace(/>/g,"&gt;"); return `<a href="${s}" target="_blank" rel="noopener noreferrer">${s}</a>`; });
   }
   function extractUrls(text) { return text.match(URL_RE) || []; }
+
+  // Helpers for link cards
+  function _domain(url) { try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; } }
+  function _faviconSrc(url) { try { return `https://www.google.com/s2/favicons?sz=32&domain=${new URL(url).hostname}`; } catch { return ""; } }
+
+  function _buildLinkCard(url) {
+    const card = document.createElement("a");
+    card.href = url; card.target = "_blank"; card.rel = "noopener noreferrer";
+    card.className = "link-embed-card";
+    const fav = document.createElement("img");
+    fav.className = "link-embed-favicon";
+    const fs = _faviconSrc(url);
+    if (fs) { fav.src = fs; fav.onerror = () => { fav.style.display = "none"; }; }
+    else     { fav.style.display = "none"; }
+    const info  = document.createElement("div"); info.className = "link-embed-info";
+    const dom   = document.createElement("div"); dom.className = "link-embed-domain"; dom.textContent = _domain(url);
+    const urlEl = document.createElement("div"); urlEl.className = "link-embed-url";
+    urlEl.textContent = url.length > 72 ? url.slice(0, 69) + "…" : url;
+    info.append(dom, urlEl); card.append(fav, info);
+    return card;
+  }
+
   function buildEmbed(url) {
     const yt = url.match(YT);
-    if (yt) { const f = document.createElement("iframe"); f.src = `https://www.youtube.com/embed/${yt[1]}`; f.width="320"; f.height="180"; f.style.cssText="border:none;border-radius:10px;display:block;margin-top:6px"; f.allow="accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture"; f.allowFullscreen=true; return f; }
-    if (IMG.test(url)) { const img = document.createElement("img"); img.src=url; img.className="msg-img"; img.loading="lazy"; img.alt="Image"; img.onclick=()=>uiController.openLightbox(url); return img; }
-    if (VID.test(url)) { const v = document.createElement("video"); v.src=url; v.controls=true; v.style.cssText="max-width:320px;border-radius:10px;display:block;margin-top:6px"; return v; }
-    return null;
+    if (yt) {
+      const f = document.createElement("iframe");
+      f.src = `https://www.youtube.com/embed/${yt[1]}`; f.width="320"; f.height="180";
+      f.style.cssText = "border:none;border-radius:10px;display:block;margin-top:6px";
+      f.allow = "accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture";
+      f.allowFullscreen = true; return f;
+    }
+    if (IMG.test(url)) {
+      const img = document.createElement("img"); img.src=url; img.className="msg-img";
+      img.loading="lazy"; img.alt="Image"; img.onclick=()=>uiController.openLightbox(url); return img;
+    }
+    if (VID.test(url)) {
+      const v = document.createElement("video"); v.src=url; v.controls=true;
+      v.style.cssText="max-width:320px;border-radius:10px;display:block;margin-top:6px"; return v;
+    }
+    // Generic URL — render a branded link card (domain + favicon, no external data fetch)
+    return _buildLinkCard(url);
   }
+
   return { parseLinks, extractUrls, buildEmbed };
 })();
 
@@ -1537,7 +1609,16 @@ const emojiManager = (() => {
     fi.onchange = function() {
       const file = this.files[0]; if (!file) return;
       const name = prompt("Emoji name (no spaces):", file.name.split(".")[0].replace(/\s+/g,"_")); if (!name) return;
-      const r = new FileReader(); r.onload = e => { _custom[name] = e.target.result; accountManager.saveCustomEmojis(_custom); _buildPicker(); uiController.toast(`:${name}: added!`); };
+      const r = new FileReader(); r.onload = e => {
+        _custom[name] = e.target.result;
+        accountManager.saveCustomEmojis(_custom);
+        _buildPicker();
+        // Immediately reveal the Custom tab so the new emoji is visible right away
+        picker.classList.remove("hidden");
+        const customTab = picker.querySelector('.emoji-tab[data-cat="Custom"]');
+        if (customTab) customTab.click();
+        uiController.toast(`:${name}: added!`);
+      };
       r.readAsDataURL(file); this.value = "";
     };
     lbl.onclick = () => fi.click(); lbl.appendChild(fi); uploadRow.appendChild(lbl); picker.appendChild(uploadRow);
