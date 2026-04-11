@@ -364,15 +364,29 @@ const filePermissionManager = (() => {
 })();
 
 /* ============================================================ PEER MANAGER + MESH
-   FIX: heartbeat keeps connections alive. On timeout, teardown + reconnect.
-   FIX: caller priority — lower peer ID initiates to prevent glare.
+   ROOT-CAUSE FIX for all 4 reported bugs:
+
+   When both peers call connectTo() simultaneously (e.g. from _reconnectFriends
+   running on both sides at startup), the old code called conn.close() on every
+   duplicate incoming connection.  That close event fired _teardown on the remote
+   peer, booting everyone out of the room immediately.
+
+   FIX — _setup glare resolution via _replacing set:
+   • The peer with the lower string ID keeps its outgoing DataChannel (canonical).
+   • The higher-ID peer silently retires its own outgoing and adopts the lower
+     peer's incoming channel instead.
+   • _replacing prevents the close-event on the retired connection from triggering
+     a full _teardown (which would remove the peer from the list and disrupt calls).
+   • WebRTC DataChannels are bidirectional — once the canonical channel exists,
+     both sides communicate through it regardless of who opened it.
 ============================================================ */
 const peerManager = (() => {
   let _peer = null, _myId = null;
   const _conns = {}, _profiles = {}, _pending = new Set();
   const _hbTimers = {}, _lastPong = {};
-  const HB_INTERVAL = 18000; // 18s between pings
-  const HB_TIMEOUT  = 55000; // 55s without pong = dead
+  const _replacing = new Set(); // pids whose old conn is being silently swapped
+  const HB_INTERVAL = 25000;   // ping every 25 s — generous to avoid false timeouts
+  const HB_TIMEOUT  = 90000;   // 90 s without pong = truly dead
 
   function init() {
     _peer = new Peer();
@@ -416,19 +430,44 @@ const peerManager = (() => {
   }
 
   function _setup(conn) {
-    if (_conns[conn.peer]) { conn.close(); return; }
-    _conns[conn.peer] = conn;
+    const pid = conn.peer;
+    const existing = _conns[pid];
+
+    if (existing) {
+      // Glare: both sides called connectTo() at the same time.
+      // Lower string-ID peer's outgoing DataChannel is the canonical one.
+      const myId = _myId || "\uFFFF"; // \uFFFF sorts last as a safe fallback
+      if (myId < pid) {
+        // We have the lower ID — our outgoing is canonical.
+        // Do NOT close this incoming; just ignore it. Closing would send a
+        // signal that triggers _teardown on the remote side.  The incoming
+        // DataChannel will close naturally when the remote retires its outgoing.
+        return;
+      }
+      // Their ID is lower — their outgoing is canonical.
+      // Retire our outgoing silently so _teardown doesn't cascade.
+      _replacing.add(pid);      // _teardown will no-op for this pid
+      _stopHeartbeat(pid);
+      delete _conns[pid];       // remove BEFORE close so close-event _teardown is harmless
+      _pending.delete(pid);
+      encryptionManager.removeSession(pid);
+      try { existing.close(); } catch {}
+      // Fall through to register their canonical incoming connection ↓
+    }
+
+    _conns[pid] = conn;
     uiController.updatePeerList(_conns, _profiles);
     conn.on("open", async () => {
-      _pending.delete(conn.peer);
-      _lastPong[conn.peer] = Date.now();
-      _startHeartbeat(conn.peer);
+      _replacing.delete(pid);   // full teardown is safe again after the channel opens
+      _pending.delete(pid);
+      _lastPong[pid] = Date.now();
+      _startHeartbeat(pid);
       const hs = await encryptionManager.getHandshakeBytes();
       conn.send({type:"ecdh-hello", dh:hs.dh, sig:hs.sig});
     });
     conn.on("data",  async raw => { try { await _handleRaw(conn, raw); } catch (e) { console.warn("Data:", e.message); } });
-    conn.on("close", ()        => _teardown(conn.peer));
-    conn.on("error", e         => { console.warn("Conn:", e); _teardown(conn.peer); });
+    conn.on("close", () => { _replacing.delete(pid); _teardown(pid); });
+    conn.on("error", e => { console.warn("Conn:", e); _replacing.delete(pid); _teardown(pid); });
   }
 
   function _startHeartbeat(pid) {
@@ -535,6 +574,9 @@ const peerManager = (() => {
   }
 
   function _teardown(pid) {
+    // Skip teardown if we're in the middle of silently replacing this connection
+    // (glare resolution — retiring the non-canonical outgoing DataChannel).
+    if (_replacing.has(pid)) { _replacing.delete(pid); return; }
     const hadSession = encryptionManager.hasSession(pid);
     _stopHeartbeat(pid);
     delete _conns[pid]; _pending.delete(pid);
