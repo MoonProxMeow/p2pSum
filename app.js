@@ -165,7 +165,7 @@ const accountManager = (() => {
     });
   }
   function burnAccount() {
-    ["astral_account","astral_settings","astral_friends","nextalk_account","nextalk_settings","nextalk_friends","nextalk_custom_emojis"].forEach(k => localStorage.removeItem(k));
+    ["astral_account","astral_settings","astral_friends","astral_peer_id","nextalk_account","nextalk_settings","nextalk_friends","nextalk_custom_emojis"].forEach(k => localStorage.removeItem(k));
     settingsManager.clearAll(); _acc = _def(); localStorage.setItem(KEY, JSON.stringify(_acc));
   }
   function refreshFriendKey() { _acc.friendKey = _genKey(); save(); return _acc.friendKey; }
@@ -388,10 +388,14 @@ const peerManager = (() => {
   const HB_INTERVAL = 25000;   // ping every 25 s — generous to avoid false timeouts
   const HB_TIMEOUT  = 90000;   // 90 s without pong = truly dead
 
-  function init() {
-    _peer = new Peer();
-    _peer.on("open", async id => {
-      _myId = id;
+  const PEER_ID_KEY = "astral_peer_id";
+
+  function _createPeer(savedId) {
+    const p = savedId ? new Peer(savedId) : new Peer();
+    p.on("open", async id => {
+      // Persist room ID so the same room survives a page refresh
+      localStorage.setItem(PEER_ID_KEY, id);
+      _myId = id; _peer = p;
       uiController.setMyId(id);
       await encryptionManager.init();
       uiController.initAvatarDisplay();
@@ -399,9 +403,25 @@ const peerManager = (() => {
       friendsManager.reconcileConnectedPeers();
       _reconnectFriends();
     });
-    _peer.on("connection", conn => _setup(conn));
-    _peer.on("call",       call => callManager.handleIncomingCall(call));
-    _peer.on("error",      e    => console.warn("Peer error:", e.type));
+    p.on("connection", conn => _setup(conn));
+    p.on("call",       call => callManager.handleIncomingCall(call));
+    p.on("error", e => {
+      console.warn("Peer error:", e.type);
+      // If the saved ID is already claimed on the signaling server, try a fresh random one
+      if (e.type === "unavailable-id") {
+        localStorage.removeItem(PEER_ID_KEY);
+        _createPeer(null);
+      }
+    });
+    // Lost signaling server connection — try to re-register without dropping peer connections
+    p.on("disconnected", () => {
+      setTimeout(() => { if (p && !p.destroyed) p.reconnect(); }, 1500);
+    });
+    _peer = p;
+  }
+
+  function init() {
+    _createPeer(localStorage.getItem(PEER_ID_KEY));
   }
 
   function _reconnectFriends() {
@@ -458,12 +478,22 @@ const peerManager = (() => {
     _conns[pid] = conn;
     uiController.updatePeerList(_conns, _profiles);
     conn.on("open", async () => {
-      _replacing.delete(pid);   // full teardown is safe again after the channel opens
+      // Determine initiator role BEFORE deleting from _pending.
+      // Only the peer who called connectTo() should start the handshake.
+      // The responder stays silent and waits for the initiator's ecdh-hello.
+      // This eliminates the double-handshake (both sides firing on open) which
+      // was causing setSession to be called twice, resetting counters mid-stream
+      // and creating a replay-protection mismatch on subsequent messages.
+      const weAreInitiator = _pending.has(pid);
       _pending.delete(pid);
+      _replacing.delete(pid);
       _lastPong[pid] = Date.now();
       _startHeartbeat(pid);
-      const hs = await encryptionManager.getHandshakeBytes();
-      conn.send({type:"ecdh-hello", dh:hs.dh, sig:hs.sig});
+      if (weAreInitiator) {
+        const hs = await encryptionManager.getHandshakeBytes();
+        conn.send({type:"ecdh-hello", dh:hs.dh, sig:hs.sig});
+      }
+      // Responder waits — ecdh-hello arrives as a data event and is handled there
     });
     conn.on("data",  async raw => { try { await _handleRaw(conn, raw); } catch (e) { console.warn("Data:", e.message); } });
     conn.on("close", () => { _replacing.delete(pid); _teardown(pid); });
@@ -497,19 +527,23 @@ const peerManager = (() => {
     if (raw.type === "ecdh-hello") {
       await encryptionManager.setSession(pid, raw.dh, raw.sig);
       if (!raw._reply) {
+        // Responder: send our key back then profile
         const hs = await encryptionManager.getHandshakeBytes();
         conn.send({type:"ecdh-hello", dh:hs.dh, sig:hs.sig, _reply:true});
       }
+      // IMPORTANT: send profile and mesh-peers SEQUENTIALLY, not with Promise.all.
+      // Concurrent calls to _enc all call encrypt() which mutates st.key via _ratchet.
+      // Running them in parallel causes all calls to ratchet from the same base key,
+      // so every message gets the same ratcheted key instead of advancing the chain.
+      // The receiver ratchets sequentially, so keys diverge → all messages after
+      // counter 0 fail to decrypt. Sequential awaits keep the ratchet in lock-step.
       const acc = accountManager.get();
-      // Send profile, mesh-peers, and custom emojis in parallel for lower latency
+      await _enc(conn, {type:"profile", user:acc.username, avatar:acc.avatar, friendKey:acc.friendKey});
       const known = Object.keys(_conns).filter(p => p !== pid);
-      const emojis = accountManager.getCustomEmojis();
-      await Promise.all([
-        _enc(conn, {type:"profile", user:acc.username, avatar:acc.avatar, friendKey:acc.friendKey}),
-        known.length ? _enc(conn, {type:"mesh-peers", peers:known}) : Promise.resolve(),
-        Object.keys(emojis).length ? _enc(conn, {type:"emoji-sync", emojis}) : Promise.resolve()
-      ]);
-      // Caller priority: lower peer ID initiates to avoid glare
+      if (known.length) await _enc(conn, {type:"mesh-peers", peers:known});
+      // Emoji sync is NOT sent here — sending large base64 blobs inline in the
+      // handshake can exceed WebRTC DataChannel limits and close the connection.
+      // Custom emojis are broadcast lazily when the user adds one (see emojiManager).
       if (callManager.isInCall()) callManager.callPeer(pid);
       return;
     }
@@ -606,6 +640,7 @@ const peerManager = (() => {
     Object.keys(_conns).forEach(k => delete _conns[k]);
     try { _peer.destroy(); } catch {}
     _peer = null; _myId = null;
+    localStorage.removeItem(PEER_ID_KEY); // force fresh ID on next load
     callManager.leaveCall();
     uiController.updatePeerList({}, {});
     uiController.toast("🚨 Emergency disconnect");
