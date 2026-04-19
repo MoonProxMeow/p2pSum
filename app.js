@@ -23,48 +23,52 @@
     if (c && e.shiftKey && /^[ijIJ]$/.test(e.key)) { e.preventDefault(); return false; }
     if (c && e.key === "p") { e.preventDefault(); return false; }
   });
-  (function () {
-    const wm = document.createElement("div");
-    wm.id = "wm-layer";
-    wm.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:8500;overflow:hidden;opacity:0;transition:opacity .1s";
-    const c = document.createElement("canvas"); c.width = 800; c.height = 600;
-    const ctx = c.getContext("2d");
-    ctx.save(); ctx.translate(400, 300); ctx.rotate(-0.4);
-    ctx.font = "bold 38px sans-serif"; ctx.fillStyle = "rgba(0,0,0,0.88)"; ctx.textAlign = "center";
-    ["AstralAurora — CONFIDENTIAL", "UNAUTHORIZED REPRODUCTION", "PROHIBITED"].forEach((t, i) => ctx.fillText(t, 0, i * 52 - 52));
-    ctx.restore();
-    wm.appendChild(c); document.body.appendChild(wm);
-    window.addEventListener("beforeprint", () => { wm.style.opacity = "1"; });
-    window.addEventListener("afterprint",  () => { wm.style.opacity = "0"; });
-    document.addEventListener("keyup", e => {
-      if (e.key === "PrintScreen" || (e.metaKey && e.shiftKey && ["3","4","5"].includes(e.key))) {
-        wm.style.opacity = "1"; setTimeout(() => { wm.style.opacity = "0"; }, 3000);
+  // Defer all body mutations — this IIFE can run before <body> is parsed
+  function _initDOMProtection() {
+    (function () {
+      const wm = document.createElement("div");
+      wm.id = "wm-layer";
+      wm.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:8500;overflow:hidden;opacity:0;transition:opacity .1s";
+      const c = document.createElement("canvas"); c.width = 800; c.height = 600;
+      const ctx = c.getContext("2d");
+      ctx.save(); ctx.translate(400, 300); ctx.rotate(-0.4);
+      ctx.font = "bold 38px sans-serif"; ctx.fillStyle = "rgba(0,0,0,0.88)"; ctx.textAlign = "center";
+      ["AstralAurora — CONFIDENTIAL", "UNAUTHORIZED REPRODUCTION", "PROHIBITED"].forEach((t, i) => ctx.fillText(t, 0, i * 52 - 52));
+      ctx.restore();
+      wm.appendChild(c); document.body.appendChild(wm);
+      window.addEventListener("beforeprint", () => { wm.style.opacity = "1"; });
+      window.addEventListener("afterprint",  () => { wm.style.opacity = "0"; });
+      document.addEventListener("keyup", e => {
+        if (e.key === "PrintScreen" || (e.metaKey && e.shiftKey && ["3","4","5"].includes(e.key))) {
+          wm.style.opacity = "1"; setTimeout(() => { wm.style.opacity = "0"; }, 3000);
+        }
+      });
+    })();
+    const footer = document.createElement("div");
+    footer.style.cssText = "position:fixed;bottom:4px;right:8px;font-size:9px;opacity:.05;pointer-events:none;z-index:9999;font-family:monospace;user-select:none";
+    footer.textContent = "© AstralAurora P2P 2025";
+    document.body.appendChild(footer);
+    // Generate star field on canvas
+    (function generateStars() {
+      const sf = document.getElementById("star-field"); if (!sf) return;
+      const c = document.createElement("canvas");
+      c.width = window.innerWidth; c.height = window.innerHeight;
+      c.style.cssText = "position:absolute;inset:0;width:100%;height:100%";
+      const ctx = c.getContext("2d");
+      for (let i = 0; i < 220; i++) {
+        const x   = Math.random() * c.width;
+        const y   = Math.random() * c.height;
+        const r   = Math.random() < 0.08 ? 1.5 : 0.6;
+        const opc = (Math.random() * 0.55 + 0.1).toFixed(2);
+        const col = Math.random() < 0.25 ? `rgba(200,180,255,${opc})` : `rgba(255,255,255,${opc})`;
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fillStyle = col; ctx.fill();
       }
-    });
-  })();
-  const footer = document.createElement("div");
-  footer.style.cssText = "position:fixed;bottom:4px;right:8px;font-size:9px;opacity:.05;pointer-events:none;z-index:9999;font-family:monospace;user-select:none";
-  footer.textContent = "© AstralAurora P2P 2025";
-  document.body.appendChild(footer);
-
-  // Generate star field on canvas
-  (function generateStars() {
-    const sf = document.getElementById("star-field"); if (!sf) return;
-    const c = document.createElement("canvas");
-    c.width = window.innerWidth; c.height = window.innerHeight;
-    c.style.cssText = "position:absolute;inset:0;width:100%;height:100%";
-    const ctx = c.getContext("2d");
-    for (let i = 0; i < 220; i++) {
-      const x   = Math.random() * c.width;
-      const y   = Math.random() * c.height;
-      const r   = Math.random() < 0.08 ? 1.5 : 0.6;
-      const opc = (Math.random() * 0.55 + 0.1).toFixed(2);
-      const col = Math.random() < 0.25 ? `rgba(200,180,255,${opc})` : `rgba(255,255,255,${opc})`;
-      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fillStyle = col; ctx.fill();
-    }
-    sf.appendChild(c);
-  })();
+      sf.appendChild(c);
+    })();
+  }
+  if (document.body) { _initDOMProtection(); }
+  else { document.addEventListener("DOMContentLoaded", _initDOMProtection); }
 })();
 
 /* ============================================================ CONSTANTS */
@@ -209,6 +213,17 @@ const accountManager = (() => {
 const encryptionManager = (() => {
   let _dhKP = null, _sigKP = null;
   const _send = {}, _recv = {}, _sigKeys = {}, _rhTimers = {};
+  // Per-peer serial queue for decrypt — prevents concurrent ratchet state corruption.
+  // If two encrypted frames arrive in the same tick, both would read the same
+  // lastCounter and st.key before either finished ratcheting, causing AES-GCM
+  // failures on all subsequent messages.  Queueing serialises decrypt per peer.
+  const _decryptQueues = {}; // pid → Promise (the tail of the chain)
+  function _queueDecrypt(pid, fn) {
+    const prev = _decryptQueues[pid] || Promise.resolve();
+    const next = prev.then(fn).catch(() => {}); // swallow so queue never stalls
+    _decryptQueues[pid] = next;
+    return next;
+  }
 
   async function init() {
     [_dhKP, _sigKP] = await Promise.all([
@@ -253,14 +268,20 @@ const encryptionManager = (() => {
   }
   function _scheduleRH(pid) {
     clearTimeout(_rhTimers[pid]);
-    const mins = settingsManager.get("rehandshakeMinutes") || 10;
-    if (!mins) return;
+    // FIX: use nullish coalescing — `|| 10` would prevent 0 from disabling the interval
+    const mins = settingsManager.get("rehandshakeMinutes") ?? 10;
+    if (mins === 0) return; // 0 means disabled
     _rhTimers[pid] = setTimeout(() => peerManager._rehandshake(pid), mins * 60 * 1000);
   }
   function hasSession(pid)    { return !!(_send[pid] && _recv[pid]); }
   function removeSession(pid) {
     delete _send[pid]; delete _recv[pid]; delete _sigKeys[pid];
+    delete _decryptQueues[pid]; // cancel pending decrypts for this peer
     clearTimeout(_rhTimers[pid]); delete _rhTimers[pid];
+  }
+  // Exposed so peerManager can queue decrypts serially per peer
+  function queueDecrypt(pid, payload) {
+    return _queueDecrypt(pid, () => decrypt(pid, payload));
   }
   function _pad(bytes) {
     const block = 256, total = Math.ceil((bytes.length + 2) / block) * block;
@@ -307,7 +328,7 @@ const encryptionManager = (() => {
     const dec = await crypto.subtle.decrypt({name:"AES-GCM", iv}, st.key, cb);
     return JSON.parse(new TextDecoder().decode(_unpad(new Uint8Array(dec))));
   }
-  return { init, getHandshakeBytes, setSession, hasSession, removeSession, encrypt, decrypt };
+  return { init, getHandshakeBytes, setSession, hasSession, removeSession, encrypt, decrypt, queueDecrypt };
 })();
 
 /* ============================================================ IMAGE PROCESSOR */
@@ -407,9 +428,11 @@ const peerManager = (() => {
     p.on("call",       call => callManager.handleIncomingCall(call));
     p.on("error", e => {
       console.warn("Peer error:", e.type);
-      // If the saved ID is already claimed on the signaling server, try a fresh random one
+      // FIX: destroy the failed peer before creating a new one to avoid
+      // duplicate event listeners and resource leaks
       if (e.type === "unavailable-id") {
         localStorage.removeItem(PEER_ID_KEY);
+        try { p.destroy(); } catch {}
         _createPeer(null);
       }
     });
@@ -444,6 +467,8 @@ const peerManager = (() => {
   }
 
   function connectTo(pid) {
+    // FIX: guard against clicking Join before PeerJS open event fires
+    if (!_peer || !_myId) { uiController.toast("Not connected yet — please wait."); return; }
     if (!pid || pid === _myId || _conns[pid] || _pending.has(pid)) return;
     _pending.add(pid);
     _setup(_peer.connect(pid, {reliable:true}));
@@ -496,7 +521,8 @@ const peerManager = (() => {
       // Responder waits — ecdh-hello arrives as a data event and is handled there
     });
     conn.on("data",  async raw => { try { await _handleRaw(conn, raw); } catch (e) { console.warn("Data:", e.message); } });
-    conn.on("close", () => { _replacing.delete(pid); _teardown(pid); });
+    // FIX: check _replacing BEFORE deleting — the _teardown guard needs it still set
+    conn.on("close", () => { if (_replacing.has(pid)) { _replacing.delete(pid); return; } _teardown(pid); });
     conn.on("error", e => { console.warn("Conn:", e); _replacing.delete(pid); _teardown(pid); });
   }
 
@@ -557,8 +583,12 @@ const peerManager = (() => {
 
     if (raw.encrypted) {
       if (!encryptionManager.hasSession(pid)) return;
-      try { _dispatch(conn, await encryptionManager.decrypt(pid, raw.payload)); }
-      catch (e) { console.warn("Decrypt:", e.message); }
+      // FIX: queue decrypts serially per peer — concurrent async decrypts would race
+      // on ratchet state (reading the same st.key / lastCounter before either
+      // finishes mutating them), corrupting the session permanently.
+      encryptionManager.queueDecrypt(pid, raw.payload)
+        .then(obj => { if (obj) _dispatch(conn, obj); })
+        .catch(e => console.warn("Decrypt:", e.message));
       return;
     }
     _dispatch(conn, raw);
@@ -572,38 +602,65 @@ const peerManager = (() => {
 
   function _dispatch(conn, data) {
     const pid = conn.peer;
+    // FIX: all cases use optional chaining / nullish coalescing so a malformed or
+    // truncated packet can't throw an unhandled exception and kill the data handler.
     switch (data.type) {
       case "profile":
         setProfile(pid, {username:data.user||"Peer", avatar:data.avatar||null, friendKey:data.friendKey||null});
         break;
       case "mesh-peers":
-        if (Array.isArray(data.peers)) data.peers.forEach(id => connectTo(id));
+        if (Array.isArray(data.peers)) data.peers.forEach(id => { if (typeof id === "string") connectTo(id); });
         break;
       case "emoji-sync":
-        emojiManager.receiveRemoteEmojis(data.emojis);
+        if (data.emojis && typeof data.emojis === "object") emojiManager.receiveRemoteEmojis(data.emojis);
         break;
       case "message": {
         if (data.channel && data.channel !== "general") break;
         if (!window.__seenMsgs) window.__seenMsgs = new Set();
         if (data.msgId && window.__seenMsgs.has(data.msgId)) break;
         if (data.msgId) window.__seenMsgs.add(data.msgId);
-        uiController.appendMessage({ user:data.user, text:data.text, avatar:_profiles[pid]?.avatar||null, isSelf:false, msgId:data.msgId, ts:data.ts||Date.now() });
+        const msgText = typeof data.text === "string" ? data.text : "";
+        uiController.appendMessage({ user:data.user||"Peer", text:msgText, avatar:_profiles[pid]?.avatar||null, isSelf:false, msgId:data.msgId, ts:data.ts||Date.now() });
         if (dmManager.getActivePid()) document.getElementById("nav-main")?.classList.add("has-unread");
         break;
       }
-      case "message-edit":       uiController.editMessage(data.msgId, data.newText); break;
-      case "reaction":           uiController.handleReaction(data); break;
-      case "dm":                 dmManager.receiveMessage(pid, data); break;
-      case "dm-image":           dmManager.receiveImage(pid, data); break;
-      case "file-meta":          fileTransferManager.receiveMeta(pid, data); break;
-      case "file-chunk":         fileTransferManager.receiveChunk(data); break;
-      case "file-end":           fileTransferManager.receiveEnd(data, pid); break;
+      case "message-edit":
+        if (data.msgId && typeof data.newText === "string") uiController.editMessage(data.msgId, data.newText);
+        break;
+      case "reaction":
+        if (data.msgId && data.emoji) uiController.handleReaction(data);
+        break;
+      case "dm":
+        if (typeof data.text === "string") dmManager.receiveMessage(pid, data);
+        break;
+      case "dm-image":
+        if (data.b64 && data.mimeType) dmManager.receiveImage(pid, data);
+        break;
+      case "file-meta":
+        if (data.id && data.name) fileTransferManager.receiveMeta(pid, data);
+        break;
+      case "file-chunk":
+        if (data.id && typeof data.index === "number" && data.chunk) fileTransferManager.receiveChunk(data);
+        break;
+      case "file-end":
+        if (data.id) fileTransferManager.receiveEnd(data, pid);
+        break;
       case "call-state":         callManager.handlePeerState(pid, data); break;
-      case "download-request":   filePermissionManager.handleRequest(pid, data); break;
-      case "download-response":  filePermissionManager.handleResponse(data); break;
-      case "friend-request":     friendsManager.handleIncomingRequest(pid, data); break;
-      case "friend-accept":      friendsManager.handleAccepted(pid, data); break;
-      case "friend-decline":     friendsManager.handleDeclined(pid, data); break;
+      case "download-request":
+        if (data.tokenId && data.fileName) filePermissionManager.handleRequest(pid, data);
+        break;
+      case "download-response":
+        if (data.tokenId) filePermissionManager.handleResponse(data);
+        break;
+      case "friend-request":
+        if (data.token && data.senderKey) friendsManager.handleIncomingRequest(pid, data);
+        break;
+      case "friend-accept":
+        if (data.token && data.acceptorKey) friendsManager.handleAccepted(pid, data);
+        break;
+      case "friend-decline":
+        if (data.token) friendsManager.handleDeclined(pid, data);
+        break;
     }
   }
 
@@ -763,7 +820,9 @@ const callManager = (() => {
     _pttUp = e => {
       if (e.key === key && _pttActive) {
         _pttActive = false;
-        if (!_inCall || _muted || _deafened) _ls?.getAudioTracks().forEach(t => t.enabled = false);
+        // FIX: always silence mic on PTT release — old condition (!_inCall || _muted || _deafened)
+        // was inverted; if in-call and not muted it evaluated false and left mic open permanently
+        if (_inCall && _ls) _ls.getAudioTracks().forEach(t => { t.enabled = false; });
         document.getElementById("ptt-indicator")?.classList.add("hidden");
         document.getElementById("ptt-btn")?.classList.remove("ptt-active");
       }
@@ -895,8 +954,19 @@ const callManager = (() => {
     if (!_screen) return; _screen = false; mediaProtectionManager.onScreenShareEnd();
     _ls.getVideoTracks().forEach(t => t.stop());
     let ct = null;
-    try { const s = await navigator.mediaDevices.getUserMedia({video:true,audio:false}); ct = s.getVideoTracks()[0]; if (ct) ct.enabled = _camOn; } catch {}
-    _replaceVideoTrackInStream(_ls, ct); if (ct) _replaceVideoInCalls(ct); _addVideoEl("local", _ls, true);
+    // FIX: only request a new camera track if the camera was actually on before screen share.
+    // Previously it always called getUserMedia({video:true}) which prompted for camera
+    // permission and briefly lit the camera LED even when the user never had their cam on.
+    if (_camOn) {
+      try {
+        const s = await navigator.mediaDevices.getUserMedia({video:true, audio:false});
+        ct = s.getVideoTracks()[0];
+        if (ct) ct.enabled = true; // cam was on — keep it on
+      } catch {}
+    }
+    _replaceVideoTrackInStream(_ls, ct);
+    if (ct) _replaceVideoInCalls(ct);
+    _addVideoEl("local", _ls, true);
     uiController.updateCallUI(_inCall,_camOn,_muted,_deafened,_screen);
     peerManager.broadcast({type:"call-state",inCall:_inCall,cameraOn:_camOn,muted:_muted,screenShare:_screen});
   }
@@ -952,7 +1022,8 @@ const callManager = (() => {
   }
   return { isInCall, startCall, callPeer, handleIncomingCall, removePeerCall, leaveCall,
            toggleCamera, toggleMute, toggleDeafen, toggleNoise, toggleScreen, stopScreen,
-           handlePeerState, applyDRMBlackout, getLocalStream, refreshPTT, refreshMuteState };
+           handlePeerState, applyDRMBlackout, applyVoiceIsolation: _applyVoiceIsolation,
+           getLocalStream, refreshPTT, refreshMuteState };
 })();
 
 /* ============================================================ MEDIA PROTECTION */
@@ -970,8 +1041,16 @@ const mediaProtectionManager = (() => {
     if (navigator.mediaDevices?.setCaptureHandleConfig) { try { navigator.mediaDevices.setCaptureHandleConfig({handle:"astralAurora-protected"}); } catch {} }
     const orig = navigator.mediaDevices.getDisplayMedia.bind(navigator.mediaDevices);
     navigator.mediaDevices.getDisplayMedia = async function(c) {
-      _on(); const s = await orig(c);
-      s.getVideoTracks().forEach(t => t.addEventListener("ended", () => { if (!_ss) _off(); })); return s;
+      _on(); // blackout immediately — before the user even picks a window
+      try {
+        const s = await orig(c);
+        s.getVideoTracks().forEach(t => t.addEventListener("ended", () => { if (!_ss) _off(); }));
+        return s;
+      } catch (err) {
+        // User cancelled or permission denied — lift blackout immediately
+        _off();
+        throw err;
+      }
     };
   }
   return { init, isDrmActive, onScreenShareStart, onScreenShareEnd };
@@ -1009,10 +1088,16 @@ const fileTransferManager = (() => {
     if (!conn.open||!encryptionManager.hasSession(conn.peer)) return;
     conn.send({encrypted:true, payload:await encryptionManager.encrypt(conn.peer, obj)});
   }
-  function receiveMeta(pid, data)  { _in[data.id] = {meta:data,chunks:[],peer:pid}; }
+  function receiveMeta(pid, data)  {
+    _in[data.id] = {meta:data, chunks:[], peer:pid};
+    // FIX: memory leak — if the sender disconnects mid-transfer, file-end never arrives
+    // and chunks accumulate forever. Auto-expire after 5 minutes.
+    _in[data.id]._expiry = setTimeout(() => { delete _in[data.id]; }, 5 * 60 * 1000);
+  }
   function receiveChunk(data)      { if (_in[data.id]) _in[data.id].chunks[data.index] = data.chunk; }
   function receiveEnd(data, pid) {
     const entry = _in[data.id]; if (!entry) return;
+    clearTimeout(entry._expiry); // clear the leak-guard timer
     const {meta,chunks} = entry;
     const arrays = chunks.map(b64=>Uint8Array.from(atob(b64),c=>c.charCodeAt(0)));
     const total  = arrays.reduce((n,a)=>n+a.length,0);
@@ -1048,7 +1133,10 @@ const dmManager = (() => {
   dmImgInput.addEventListener("change", async function() {
     const f=this.files[0]; if(!f||!_activePid)return; this.value="";
     const file=await imageProcessor.stripMetadata(f);
-    if(file.size>200*1024){await fileTransferManager.sendFile(file,{},_activePid);return;}
+    // FIX: WebRTC DataChannel max reliable message size is ~16-64KB depending
+    // on browser. Base64 expands by ~33%, so a 200KB image → 267KB payload.
+    // Use 30KB as the cutoff so the JSON payload stays safely under 40KB.
+    if(file.size>30*1024){await fileTransferManager.sendFile(file,{},_activePid);return;}
     const reader=new FileReader();
     reader.onload=async e=>{
       const b64=e.target.result.split(",")[1]; const acc=accountManager.get();
@@ -1086,10 +1174,17 @@ const dmManager = (() => {
     await peerManager.sendTo(_activePid,msg);
   }
   function receiveMessage(fromPid,data) {
-    const profile=peerManager.getProfile(fromPid); const msg={...data,isSelf:false,avatar:profile.avatar};
+    const profile=peerManager.getProfile(fromPid);
+    const msg={...data, text: typeof data.text === "string" ? data.text : "", isSelf:false, avatar:profile.avatar};
     _store(fromPid,msg);
     if(_activePid===fromPid){_renderDM(msg);}
-    else{_unread[fromPid]=(_unread[fromPid]||0)+1;uiController.toast(`💬 DM from ${profile.username||"Peer"}: ${data.text.slice(0,40)}`);_notifDot(fromPid);}
+    else{
+      _unread[fromPid]=(_unread[fromPid]||0)+1;
+      // FIX: safe slice — data.text could be undefined on malformed packets
+      const preview=(msg.text).slice(0,40);
+      uiController.toast(`💬 DM from ${profile.username||"Peer"}: ${preview}`);
+      _notifDot(fromPid);
+    }
     _renderConvList();_updateDMBadge();
   }
   function receiveImage(fromPid,data) {
@@ -1210,7 +1305,11 @@ const friendsManager = (() => {
     const acc=accountManager.get();
     if(kd)kd.textContent=acc.friendKey||"—";
     document.getElementById("refresh-friend-key")?.addEventListener("click",()=>{
-      const nk=accountManager.refreshFriendKey(); if(kd)kd.textContent=nk; uiController.toast("Friend key refreshed!");
+      const nk=accountManager.refreshFriendKey(); if(kd)kd.textContent=nk;
+      // FIX: broadcast updated key so online peers see the new key immediately
+      const acc=accountManager.get();
+      peerManager.broadcast({type:"profile",user:acc.username,avatar:acc.avatar,friendKey:nk});
+      uiController.toast("Friend key refreshed!");
     });
     document.getElementById("copy-friend-key")?.addEventListener("click",()=>{
       const k=accountManager.get().friendKey;
@@ -1361,14 +1460,40 @@ const friendsManager = (() => {
            sendRequest, handleIncomingRequest, handleAccepted, handleDeclined, hasOutboundRequest };
 })();
 
+/* Standalone HTML-escape — used by embedRenderer (before uiController is defined)
+   and aliased inside uiController. Fixes the link-parser entity swallowing bug:
+   parseLinks must receive raw text and escape it internally, not receive pre-escaped
+   text where &lt; would be matched as part of a URL by the URL regex. */
+function _escHtml(s) {
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
 /* ============================================================ EMBED RENDERER */
 const embedRenderer = (() => {
   const YT=/(?:youtube\.com\/watch\?v=|youtu\.be\/)([A-Za-z0-9_-]{11})/;
   const IMG=/\.(jpe?g|png|gif|webp|svg|avif)(\?.*)?$/i;
   const VID=/\.(mp4|webm|ogg)(\?.*)?$/i;
-  const URL_RE=/https?:\/\/[^\s<>"']+/g;
-  function parseLinks(text){ return text.replace(URL_RE,url=>{const s=url.replace(/</g,"&lt;").replace(/>/g,"&gt;");return `<a href="${s}" target="_blank" rel="noopener noreferrer">${s}</a>`;}); }
-  function extractUrls(text){ return text.match(URL_RE)||[]; }
+  // FIX: parseLinks takes RAW text, escapes non-URL segments itself.
+  // Previously it received pre-escaped text where < was &lt;, causing the URL
+  // regex [^\s<>"'] to match through &lt; and absorb HTML entities into URLs.
+  const URL_RE = /https?:\/\/[^\s<>"']+/g;
+  function parseLinks(rawText) {
+    let out = "", last = 0;
+    URL_RE.lastIndex = 0; // reset stateful /g regex before each use
+    let m;
+    while ((m = URL_RE.exec(rawText)) !== null) {
+      out += _escHtml(rawText.slice(last, m.index));
+      const safe = _escHtml(m[0]);
+      out += `<a href="${safe}" target="_blank" rel="noopener noreferrer">${safe}</a>`;
+      last = m.index + m[0].length;
+    }
+    out += _escHtml(rawText.slice(last));
+    return out;
+  }
+  function extractUrls(rawText) {
+    URL_RE.lastIndex = 0;
+    return rawText.match(URL_RE) || [];
+  }
   function _domain(url){ try{return new URL(url).hostname.replace(/^www\./,"");}catch{return url;} }
   function _faviconSrc(url){ try{return `https://www.google.com/s2/favicons?sz=32&domain=${new URL(url).hostname}`;}catch{return "";} }
   function _buildLinkCard(url){
@@ -1412,9 +1537,12 @@ const emojiManager = (() => {
   function receiveRemoteEmojis(emojis){
     if(!emojis||typeof emojis!=="object")return;
     Object.entries(emojis).forEach(([k,v])=>{
-      if(typeof v==="string"&&v.length<500000&&!_custom[k])_remote[k]=v;
+      if(typeof k!=="string"||typeof v!=="string")return;
+      // FIX XSS: only accept data-URL images or https URLs — reject anything else
+      if(!/^(data:image\/(png|jpe?g|gif|webp|svg\+xml);base64,|https:\/\/)/.test(v))return;
+      if(v.length>500000)return; // 500KB cap
+      if(!_custom[k]) _remote[k]=v; // local always wins
     });
-    // Re-render visible message containers so remote emojis appear immediately
     document.querySelectorAll(".messages").forEach(c=>renderCustomEmojis(c));
   }
 
@@ -1513,18 +1641,59 @@ const emojiManager = (() => {
     }
   }
   function _autocomplete(e){
-    const el=e.target,text=el.value; const m=text.match(/:([a-zA-Z0-9_]+)$/); if(!m)return;
+    const el=e.target, text=el.value; const m=text.match(/:([a-zA-Z0-9_]+)$/); if(!m)return;
     const key=m[1].toLowerCase();
-    if(_custom[key]){el.value=text.slice(0,text.lastIndexOf(":"))+`:${key}:`;return;}
+    // FIX: names are stored as-entered (case-sensitive) but typed with lowercase trigger
+    const customKey=Object.keys(_custom).find(k=>k.toLowerCase()===key);
+    if(customKey){el.value=text.slice(0,text.lastIndexOf(":"))+`:${customKey}:`;return;}
     if(_CODES[key])el.value=text.slice(0,text.lastIndexOf(":"))+_CODES[key];
   }
+  // Escape string for use inside a RegExp
+  function _reEscape(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"); }
+
   function renderCustomEmojis(container){
     const allEmojis={..._remote,..._custom}; // local takes precedence
     if(!Object.keys(allEmojis).length)return;
     container.querySelectorAll(".msg-text").forEach(el=>{
-      Object.entries(allEmojis).forEach(([name,src])=>{
-        el.innerHTML=el.innerHTML.replace(new RegExp(`:${name}:`,"g"),`<img src="${src}" class="custom-emoji-inline" alt=":${name}:" title=":${name}:">`);
+      // FIX: idempotent — skip elements that have already been processed for a given
+      // set of emoji names. Without this, repeated calls kept re-wrapping already-
+      // transformed <img> tags (the :name: text was gone but the pattern could match
+      // inside other attributes, corrupting the HTML on every message received).
+      const done = el.dataset.emojiSet || "";
+      const nameSet = Object.keys(allEmojis).sort().join(",");
+      if (done === nameSet) return;
+      // FIX: build replacement using DOM walking instead of innerHTML.replace to
+      // avoid regex metacharacter injection and prevent double-escaping
+      Object.entries(allEmojis).forEach(([name, src])=>{
+        const pattern=new RegExp(`:${_reEscape(name)}:`,"g");
+        // Walk text nodes only — safe, no innerHTML parsing
+        const walker=document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        const replacements=[];
+        let node;
+        while((node=walker.nextNode())){
+          if(!pattern.test(node.nodeValue))continue;
+          pattern.lastIndex=0;
+          replacements.push(node);
+        }
+        pattern.lastIndex=0;
+        replacements.forEach(textNode=>{
+          const parts=textNode.nodeValue.split(pattern);
+          if(parts.length<=1)return;
+          const frag=document.createDocumentFragment();
+          parts.forEach((part,i)=>{
+            if(part) frag.appendChild(document.createTextNode(part));
+            if(i<parts.length-1){
+              const img=document.createElement("img");
+              img.className="custom-emoji-inline";
+              img.alt=`:${name}:`; img.title=`:${name}:`;
+              img.setAttribute("src",src); // setAttribute — not .src — avoids XSS via data: coercion
+              frag.appendChild(img);
+            }
+          });
+          textNode.parentNode.replaceChild(frag,textNode);
+        });
       });
+      el.dataset.emojiSet=nameSet;
     });
   }
   return { init, setTarget, renderCustomEmojis, receiveRemoteEmojis };
@@ -1560,14 +1729,17 @@ const settingsUI = (() => {
     const rhDesc=document.createElement("div"); rhDesc.className="setting-desc"; rhDesc.textContent="Keys rotate per message + full re-negotiation on this interval. 0 = disabled.";
     rhl.append(rhLbl,rhDesc);
     const rhInp=document.createElement("input"); rhInp.type="number"; rhInp.min="0"; rhInp.max="60";
-    rhInp.value=settingsManager.get("rehandshakeMinutes")||10;
+    rhInp.value = settingsManager.get("rehandshakeMinutes") ?? 10;
     rhInp.style.cssText="width:60px;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;color:var(--text-hi);padding:4px 8px;font-family:var(--font-mono);font-size:.78rem;outline:none";
     rhInp.addEventListener("change",()=>settingsManager.set("rehandshakeMinutes",parseInt(rhInp.value)||0));
     rhRow.append(rhl,rhInp); body.appendChild(_section("ENCRYPTION",rhRow));
     body.appendChild(_section("VOICE & MEDIA",
       _toggle("adaptiveBitrate","Adaptive bitrate","Cap video call bitrate for stability"),
+      // FIX: the old callback called callManager.toggleNoise() which internally
+      // flips the setting AGAIN, so enabling it in settings immediately disabled it.
+      // Now the callback calls _applyVoiceIsolation directly (state already set by _toggle).
       _toggle("voiceIsolation","Voice isolation","HP/LP filter + gentle compressor on mic",
-              v=>{if(callManager.isInCall())callManager.toggleNoise();})
+              v => { if (callManager.isInCall()) callManager.applyVoiceIsolation(v); })
     ));
     const pttSec=document.createElement("div"); pttSec.className="settings-section";
     const pttTitle=document.createElement("div"); pttTitle.className="settings-section-title"; pttTitle.textContent="PUSH-TO-TALK"; pttSec.appendChild(pttTitle);
@@ -1759,7 +1931,10 @@ const uiController = (() => {
     if(!isSelf){uEl.style.cursor="pointer";uEl.onclick=e=>{const pid=Object.keys(peerManager.getConnections()).find(id=>peerManager.getProfile(id).username===user);if(pid)showProfilePopup(pid,uEl);};}
     const tEl=document.createElement("span"); tEl.className="msg-time"; tEl.textContent=new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
     hdr.append(uEl,tEl);
-    const body=document.createElement("div"); body.className="msg-text"; body.innerHTML=embedRenderer.parseLinks(_escapeHtml(text));
+    // FIX 21: pass raw text — parseLinks now handles its own escaping internally.
+    // Previously _escapeHtml was called first, then parseLinks ran on pre-escaped text,
+    // causing the URL regex to match through &lt;, &gt; and absorb entities into URLs.
+    const body=document.createElement("div"); body.className="msg-text"; body.innerHTML=embedRenderer.parseLinks(text);
     right.append(hdr,body);
     const showInline=settingsManager.get("inlineMediaDefault");
     embedRenderer.extractUrls(text).forEach(url=>{
@@ -1776,7 +1951,7 @@ const uiController = (() => {
       const editBtn=document.createElement("button"); editBtn.className="msg-action-btn"; editBtn.textContent="✏"; editBtn.title="Edit";
       editBtn.onclick=()=>{
         const newText=prompt("Edit message:",text); if(newText===null||newText===text)return;
-        body.innerHTML=embedRenderer.parseLinks(_escapeHtml(newText));
+        body.innerHTML=embedRenderer.parseLinks(newText); // raw text — parseLinks escapes internally
         let el=hdr.querySelector(".msg-edited");
         if(!el){el=document.createElement("span");el.className="msg-edited";el.textContent="(edited)";hdr.appendChild(el);}
         peerManager.broadcast({type:"message-edit",msgId,newText});
@@ -1809,7 +1984,7 @@ const uiController = (() => {
   function editMessage(msgId,newText){
     const wrap=_msgEls[msgId]||_dmMsgEls[msgId]; if(!wrap)return;
     const body=wrap.querySelector(".msg-text"); if(!body)return;
-    body.innerHTML=embedRenderer.parseLinks(_escapeHtml(newText));
+    body.innerHTML=embedRenderer.parseLinks(newText); // raw — parseLinks escapes internally
     const hdr=wrap.querySelector(".msg-header"); if(!hdr)return;
     let el=hdr.querySelector(".msg-edited");
     if(!el){el=document.createElement("span");el.className="msg-edited";el.textContent="(edited)";hdr.appendChild(el);}
@@ -1858,14 +2033,23 @@ const uiController = (() => {
       const url=URL.createObjectURL(blob);
       const mWrap=document.createElement("div"); mWrap.className="media-protected-wrap";
       const el=isImg?document.createElement("img"):document.createElement("video");
-      if(isImg){el.className="msg-img";el.onclick=()=>openLightbox(url);}else{el.controls=true;el.style.cssText="max-width:320px;border-radius:12px;display:block;margin-top:4px";}
+      if(isImg){
+        el.className="msg-img"; el.onclick=()=>openLightbox(url);
+      }else{
+        el.controls=true; el.style.cssText="max-width:320px;border-radius:12px;display:block;margin-top:4px";
+      }
       if(spoiler){
         const ow=document.createElement("div"); ow.className="spoiler-wrap";
         const oo=document.createElement("div"); oo.className="spoiler-overlay";
         oo.innerHTML='<span>👁 Spoiler</span><small>Click to reveal</small>';
         if(isImg)el.src="";
-        oo.onclick=()=>{oo.style.display="none";if(isImg)el.src=url;else{el.src=url;el.controls=true;}setTimeout(()=>{el.src="";URL.revokeObjectURL(url);},30000);}; ow.append(el,oo); mWrap.appendChild(ow);
-      }else{if(isImg)el.src=url;else{el.src=url;} mWrap.appendChild(el);}
+        oo.onclick=()=>{oo.style.display="none";if(isImg)el.src=url;else{el.src=url;el.controls=true;}setTimeout(()=>{el.src="";URL.revokeObjectURL(url);},30000);};
+        ow.append(el,oo); mWrap.appendChild(ow);
+      } else {
+        if(isImg) { el.src=url; el.onload=()=>URL.revokeObjectURL(url); }
+        else      { el.src=url; el.onloadeddata=()=>URL.revokeObjectURL(url); }
+        mWrap.appendChild(el);
+      }
       const dl=_dlBtn(blob,name); if(dl)mWrap.appendChild(dl);
       if(expiry>0){
         let rem=expiry; const exp=document.createElement("div"); exp.className="file-expiry";
@@ -1894,7 +2078,9 @@ const uiController = (() => {
     wrap.append(avi,right); messagesEl.appendChild(wrap); messagesEl.scrollTop=messagesEl.scrollHeight;
   }
   function _fmtTime(s){if(s<=0)return"0s";if(s<60)return s+"s";return Math.floor(s/60)+"m "+(s%60)+"s";}
-  function _escapeHtml(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
+  // Delegate to the global _escHtml so there's one canonical implementation.
+  // Still kept as a local alias so external callers via uiController._escapeHtml work.
+  function _escapeHtml(s){ return _escHtml(s); }
   function updateCallUI(inCall,camOn,muted,deafened,screen){
     joinBtn.disabled=inCall; leaveBtn.disabled=!inCall;
     leaveBtn.classList.toggle("in-call",inCall); leaveBtn.classList.toggle("not-in-call",!inCall);
