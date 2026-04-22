@@ -658,3 +658,37 @@ input, button, select, textarea { font-family: inherit; }
 .onetime-overlay { position: absolute; inset: 0; background: rgba(0,0,0,.9); border-radius: var(--radius); display: flex; align-items: center; justify-content: center; cursor: pointer; font-family: var(--font-mono); font-size: .7rem; color: var(--accent-amber); flex-direction: column; gap: 4px; }
 .onetime-viewed { opacity: .5; pointer-events: none; }
 .file-expiry { font-family: var(--font-mono); font-size: .6rem; color: var(--accent-amber); margin-top: 3px; display: flex; align-items: center; gap: 4px; }
+
+/* ============================================================ FILE ACTION POPUP */
+.file-action-popup {
+  animation: slideUp .14s var(--ease);
+}
+.file-action-popup .btn { width: 100%; text-align: left; }
+
+/* ============================================================ FILE PILL (under media) */
+.msg-file-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: rgba(17,13,34,.7); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 5px 10px;
+  margin-top: 5px; font-family: var(--font-mono);
+  font-size: .68rem; cursor: pointer; transition: var(--trans);
+  max-width: 320px; overflow: hidden;
+}
+.msg-file-pill:hover {
+  background: rgba(139,92,246,.12);
+  border-color: var(--accent);
+}
+.msg-file-pill .file-name {
+  color: var(--accent-cyan); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; flex: 1;
+}
+.msg-file-pill .file-size { color: var(--text-lo); flex-shrink: 0; }
+
+/* ============================================================ AUDIO PLAYER */
+audio {
+  filter: invert(0);
+}
+/* Style the native audio element to match the theme where supported */
+audio::-webkit-media-controls-panel {
+  background: rgba(20,16,42,.9);
+}

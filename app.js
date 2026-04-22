@@ -409,7 +409,15 @@ const peerManager = (() => {
   const HB_INTERVAL = 25000;   // ping every 25 s — generous to avoid false timeouts
   const HB_TIMEOUT  = 90000;   // 90 s without pong = truly dead
 
-  const PEER_ID_KEY = "astral_peer_id";
+  const PEER_ID_KEY     = "astral_peer_id";
+  const KNOWN_PEERS_KEY = "astral_known_peers";
+
+  function _saveKnownPeers() {
+    try { localStorage.setItem(KNOWN_PEERS_KEY, JSON.stringify(Object.keys(_conns))); } catch {}
+  }
+  function _loadKnownPeers() {
+    try { return JSON.parse(localStorage.getItem(KNOWN_PEERS_KEY) || "[]"); } catch { return []; }
+  }
 
   function _createPeer(savedId) {
     const p = savedId ? new Peer(savedId) : new Peer();
@@ -423,6 +431,8 @@ const peerManager = (() => {
       friendsManager.init();
       friendsManager.reconcileConnectedPeers();
       _reconnectFriends();
+      // Reconnect any room peers that were connected before the refresh
+      _loadKnownPeers().forEach(pid => { if (pid !== id) connectTo(pid); });
     });
     p.on("connection", conn => _setup(conn));
     p.on("call",       call => callManager.handleIncomingCall(call));
@@ -567,6 +577,7 @@ const peerManager = (() => {
       await _enc(conn, {type:"profile", user:acc.username, avatar:acc.avatar, friendKey:acc.friendKey});
       const known = Object.keys(_conns).filter(p => p !== pid);
       if (known.length) await _enc(conn, {type:"mesh-peers", peers:known});
+      _saveKnownPeers(); // persist room membership so refresh can rejoin
       // Emoji sync is NOT sent here — sending large base64 blobs inline in the
       // handshake can exceed WebRTC DataChannel limits and close the connection.
       // Custom emojis are broadcast lazily when the user adds one (see emojiManager).
@@ -665,17 +676,23 @@ const peerManager = (() => {
   }
 
   function _teardown(pid) {
-    // Skip teardown if we're in the middle of silently replacing this connection
-    // (glare resolution — retiring the non-canonical outgoing DataChannel).
     if (_replacing.has(pid)) { _replacing.delete(pid); return; }
+    // Grace period — PeerJS sometimes fires spurious close events when the signaling
+    // server hiccups without the actual WebRTC DataChannel dropping. Wait 2 s; if the
+    // connection re-opens (reconnect won), abort the teardown entirely.
     const hadSession = encryptionManager.hasSession(pid);
     _stopHeartbeat(pid);
     delete _conns[pid]; _pending.delete(pid);
     encryptionManager.removeSession(pid);
-    uiController.updatePeerList(_conns, _profiles);
-    if (hadSession) uiController.appendSystemMessage("A peer left the mesh");
-    callManager.removePeerCall(pid);
-    friendsManager.onPeerDisconnected(pid);
+    _saveKnownPeers();
+    setTimeout(() => {
+      // If a fresh connection for this pid was established in the grace window, skip UI update
+      if (_conns[pid]) return;
+      uiController.updatePeerList(_conns, _profiles);
+      if (hadSession) uiController.appendSystemMessage("A peer left the mesh");
+      callManager.removePeerCall(pid);
+      friendsManager.onPeerDisconnected(pid);
+    }, 1800);
   }
 
   async function _enc(conn, obj) {
@@ -697,7 +714,8 @@ const peerManager = (() => {
     Object.keys(_conns).forEach(k => delete _conns[k]);
     try { _peer.destroy(); } catch {}
     _peer = null; _myId = null;
-    localStorage.removeItem(PEER_ID_KEY); // force fresh ID on next load
+    localStorage.removeItem(PEER_ID_KEY);
+    localStorage.removeItem(KNOWN_PEERS_KEY);
     callManager.leaveCall();
     uiController.updatePeerList({}, {});
     uiController.toast("🚨 Emergency disconnect");
@@ -1259,18 +1277,56 @@ const dmManager = (() => {
   }
   function receiveFile(fromPid,meta,blob){
     const profile=peerManager.getProfile(fromPid);
-    const isImg=/\.(jpe?g|png|gif|webp|svg|avif)$/i.test(meta.name);
+    const _ext=(meta.name.match(/\.([^.]+)$/)||[])[1]?.toLowerCase()||"";
+    const _mime=(meta.mimeType||blob.type||"").toLowerCase();
+    const isImg=/^(jpe?g|jpg|png|gif|webp|svg|avif|bmp|tiff?|ico)$/.test(_ext)||_mime.startsWith("image/");
+    const isVid=/^(mp4|webm|ogv|mov|mkv|m4v|3gp)$/.test(_ext)               ||_mime.startsWith("video/");
+    const isAud=/^(mp3|wav|ogg|oga|flac|aac|m4a|opus)$/.test(_ext)           ||_mime.startsWith("audio/");
+
     if(isImg){
+      // Images: convert to base64 for history/re-render
       const reader=new FileReader();
       reader.onload=e=>{
         const b64=e.target.result.split(",")[1]; const mimeType=meta.mimeType||"image/jpeg";
         const msg={user:profile.username||"Peer",b64,mimeType,isSelf:false,avatar:profile.avatar||null,isImg:true};
         _store(fromPid,msg);
-        if(_activePid===fromPid){_renderImg(msg);}else{_unread[fromPid]=(_unread[fromPid]||0)+1;uiController.toast(`🖼 File from ${profile.username||"Peer"}`);_notifDot(fromPid);}
+        if(_activePid===fromPid){_renderImg(msg);}
+        else{_unread[fromPid]=(_unread[fromPid]||0)+1;uiController.toast(`🖼 Image from ${profile.username||"Peer"}`);_notifDot(fromPid);}
         _renderConvList();_updateDMBadge();
       };
       reader.readAsDataURL(blob);
+    } else if(isVid||isAud){
+      // Video/audio: render inline player with object URL
+      const url=URL.createObjectURL(blob);
+      const wrap=document.createElement("div"); wrap.className="message";
+      const avi=document.createElement("img"); avi.className="msg-avatar";
+      uiController._applyAvatar(avi,profile.username||"Peer",profile.avatar||null);
+      const right=document.createElement("div"); right.className="msg-right";
+      const hdr=document.createElement("div"); hdr.className="msg-header";
+      const u=document.createElement("span"); u.className="username dm-tag"; u.textContent=(profile.username||"Peer")+" 🔒";
+      const t=document.createElement("span"); t.className="msg-time"; t.textContent=new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+      hdr.append(u,t);
+      const mWrap=document.createElement("div"); mWrap.className="media-protected-wrap";
+      let el;
+      if(isAud){
+        el=document.createElement("audio"); el.controls=true;
+        el.style.cssText="width:100%;max-width:300px;display:block;margin-top:6px;border-radius:8px";
+        el.oncanplaythrough=()=>URL.revokeObjectURL(url);
+      }else{
+        el=document.createElement("video"); el.controls=true;
+        el.style.cssText="max-width:300px;border-radius:10px;display:block;margin-top:4px";
+        el.onloadeddata=()=>URL.revokeObjectURL(url);
+      }
+      el.src=url; mWrap.appendChild(el);
+      const pill=document.createElement("div"); pill.className="msg-file-pill";
+      pill.innerHTML=`${isAud?"🎵":"🎬"} <span class="file-name">${uiController._escapeHtml(meta.name)}</span>`;
+      mWrap.appendChild(pill);
+      right.append(hdr,mWrap); wrap.append(avi,right);
+      if(_activePid===fromPid){dmMsgs.appendChild(wrap);dmMsgs.scrollTop=dmMsgs.scrollHeight;}
+      else{_unread[fromPid]=(_unread[fromPid]||0)+1;uiController.toast(`${isAud?"🎵":"🎬"} Media from ${profile.username||"Peer"}`);_notifDot(fromPid);}
+      _renderConvList();_updateDMBadge();
     } else {
+      // Generic file pill with download
       const wrap=document.createElement("div"); wrap.className="message";
       const avi=document.createElement("img"); avi.className="msg-avatar";
       uiController._applyAvatar(avi,profile.username||"Peer",profile.avatar||null);
@@ -1281,7 +1337,9 @@ const dmManager = (() => {
       hdr.append(u,t);
       const sz=meta.size<1024?meta.size+" B":meta.size<1048576?(meta.size/1024).toFixed(1)+" KB":(meta.size/1048576).toFixed(1)+" MB";
       const row=document.createElement("div"); row.className="msg-file";
-      row.innerHTML=`<span>📄</span><span class="file-name">${uiController._escapeHtml(meta.name)}</span><span class="file-size">${sz}</span>`;
+      const nameSpan=document.createElement("span"); nameSpan.className="file-name"; nameSpan.textContent=meta.name;
+      const sizeSpan=document.createElement("span"); sizeSpan.className="file-size"; sizeSpan.textContent=sz;
+      row.append(document.createTextNode("📄 "),nameSpan,document.createTextNode(" "),sizeSpan);
       const dl=document.createElement("span"); dl.className="file-hint"; dl.textContent="↓"; dl.style.cursor="pointer";
       dl.onclick=async()=>{dl.textContent="…";const ok=await filePermissionManager.requestPermission(fromPid,blob,meta.name);dl.textContent=ok?"✓":"↓";if(ok)filePermissionManager.executeDownload(blob,meta.name);};
       row.appendChild(dl); right.append(hdr,row); wrap.append(avi,right);
@@ -1412,18 +1470,22 @@ const friendsManager = (() => {
   }
   function _acceptRequest(fromPid,data){
     const profile=peerManager.getProfile(fromPid);
-    accountManager.addFriend(data.senderKey,data.senderName||profile.username||"Friend");
-    accountManager.updateFriendPeerId(data.senderKey,fromPid);
+    accountManager.addFriend(data.senderKey, data.senderName||profile.username||"Friend");
+    accountManager.updateFriendPeerId(data.senderKey, fromPid);
     const acc=accountManager.get();
-    peerManager.sendTo(fromPid,{type:"friend-accept",token:data.token,acceptorKey:acc.friendKey,acceptorName:acc.username,acceptorAvatar:acc.avatar});
+    peerManager.sendTo(fromPid,{type:"friend-accept",token:data.token,
+      acceptorKey:acc.friendKey,acceptorName:acc.username,acceptorAvatar:acc.avatar});
     renderFriends(); uiController.toast("✅ Friend accepted: "+(data.senderName||"Peer"));
   }
   function handleAccepted(fromPid,data){
     const profile=peerManager.getProfile(fromPid);
-    if(accountManager.addFriend(data.acceptorKey,data.acceptorName||profile.username||"Friend")){
-      accountManager.updateFriendPeerId(data.acceptorKey,fromPid);
-      renderFriends(); uiController.toast("✅ "+(data.acceptorName||"Peer")+" accepted your friend request!");
-    }
+    // FIX: always update the peerId even when already a friend (e.g. re-added after remove).
+    // The old guard `if(addFriend(...))` silently skipped updateFriendPeerId when the
+    // friend already existed, leaving lastPeerId null and the friend appearing offline.
+    accountManager.addFriend(data.acceptorKey, data.acceptorName||profile.username||"Friend");
+    accountManager.updateFriendPeerId(data.acceptorKey, fromPid);
+    renderFriends();
+    uiController.toast("✅ "+(data.acceptorName||"Peer")+" accepted your friend request!");
     delete _outboundRequests[fromPid];
   }
   function handleDeclined(fromPid){
@@ -2019,37 +2081,76 @@ const uiController = (() => {
     const uEl=document.createElement("span"); uEl.className="username"; uEl.textContent=user;
     const tEl=document.createElement("span"); tEl.className="msg-time"; tEl.textContent=new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
     hdr.append(uEl,tEl);
-    const isImg=/\.(jpe?g|png|gif|webp|svg|avif)$/i.test(name);
-    const isVid=/\.(mp4|webm|ogg)$/i.test(name);
+    // Extended format detection — check extension AND MIME type so renamed files still work
+    const _ext=(name.match(/\.([^.]+)$/)||[])[1]?.toLowerCase()||"";
+    const _mime=(blob.type||"").toLowerCase();
+    const isImg=/^(jpe?g|jpg|png|gif|webp|svg|avif|bmp|tiff?|ico|heic|heif)$/.test(_ext)||_mime.startsWith("image/");
+    const isVid=/^(mp4|webm|ogv|mov|mkv|avi|flv|wmv|m4v|3gp)$/.test(_ext)           ||_mime.startsWith("video/");
+    const isAud=/^(mp3|wav|ogg|oga|flac|aac|m4a|opus|weba|aiff?)$/.test(_ext)        ||_mime.startsWith("audio/");
     const _sz=b=>{if(!b)return"";if(b<1024)return b+" B";if(b<1048576)return(b/1024).toFixed(1)+" KB";return(b/1048576).toFixed(1)+" MB";};
     const {oneTime=false,spoiler=false,expiry=0}=opts;
+
+    // Context popup shown when clicking any file element — Open in tab + Download
+    function _showFilePopup(anchor, url) {
+      document.querySelectorAll(".file-action-popup").forEach(p=>p.remove());
+      const pop = document.createElement("div"); pop.className="file-action-popup";
+      const openBtn = document.createElement("button"); openBtn.className="btn btn-primary btn-sm";
+      openBtn.textContent="🔍 Open"; openBtn.onclick=()=>{ window.open(url,"_blank"); pop.remove(); };
+      pop.appendChild(openBtn);
+      if (!oneTime) {
+        const dlBtn = document.createElement("button"); dlBtn.className="btn btn-secondary btn-sm";
+        dlBtn.textContent="↓ Download";
+        dlBtn.onclick=async()=>{ pop.remove(); const ok=await filePermissionManager.requestPermission(senderPeer,blob,name); if(ok) filePermissionManager.executeDownload(blob,name); };
+        pop.appendChild(dlBtn);
+      }
+      const rect = anchor.getBoundingClientRect();
+      pop.style.cssText=`position:fixed;top:${rect.bottom+5}px;left:${Math.min(rect.left,window.innerWidth-180)}px;z-index:3100;display:flex;flex-direction:column;gap:6px;background:rgba(14,11,29,.96);backdrop-filter:blur(18px);border:1px solid var(--border-hi);border-radius:var(--radius);padding:10px;box-shadow:0 12px 40px rgba(0,0,0,.75)`;
+      document.body.appendChild(pop);
+      function dismiss(e){ if(!pop.contains(e.target)&&e.target!==anchor){ pop.remove(); document.removeEventListener("click",dismiss,{capture:true}); } }
+      setTimeout(()=>document.addEventListener("click",dismiss,{capture:true}),10);
+    }
+
     function _dlBtn(b2,n2){
       if(oneTime)return null;
       const btn=document.createElement("button"); btn.className="media-dl-btn"; btn.textContent="↓ Download";
       btn.onclick=async()=>{btn.disabled=true;btn.textContent="Requesting…";const ok=await filePermissionManager.requestPermission(senderPeer,b2,n2);if(ok){filePermissionManager.executeDownload(b2,n2);btn.textContent="✓ Done";}else{btn.disabled=false;btn.textContent="↓ Download";}};
       return btn;
     }
-    if(isImg||isVid){
+
+    if(isImg||isVid||isAud){
       const url=URL.createObjectURL(blob);
       const mWrap=document.createElement("div"); mWrap.className="media-protected-wrap";
-      const el=isImg?document.createElement("img"):document.createElement("video");
-      if(isImg){
-        el.className="msg-img"; el.onclick=()=>openLightbox(url);
+      let el;
+      if(isAud){
+        el=document.createElement("audio"); el.controls=true;
+        el.style.cssText="width:100%;max-width:320px;display:block;margin-top:6px;border-radius:8px;accent-color:var(--accent)";
+        el.oncanplaythrough=()=>URL.revokeObjectURL(url);
+      }else if(isVid){
+        el=document.createElement("video"); el.controls=true;
+        el.style.cssText="max-width:320px;border-radius:12px;display:block;margin-top:4px";
+        el.onloadeddata=()=>URL.revokeObjectURL(url);
       }else{
-        el.controls=true; el.style.cssText="max-width:320px;border-radius:12px;display:block;margin-top:4px";
+        el=document.createElement("img"); el.className="msg-img";
+        el.onclick=()=>openLightbox(url); el.onload=()=>URL.revokeObjectURL(url);
       }
       if(spoiler){
         const ow=document.createElement("div"); ow.className="spoiler-wrap";
         const oo=document.createElement("div"); oo.className="spoiler-overlay";
         oo.innerHTML='<span>👁 Spoiler</span><small>Click to reveal</small>';
-        if(isImg)el.src="";
-        oo.onclick=()=>{oo.style.display="none";if(isImg)el.src=url;else{el.src=url;el.controls=true;}setTimeout(()=>{el.src="";URL.revokeObjectURL(url);},30000);};
+        oo.onclick=()=>{oo.style.display="none";el.src=url;if(isVid)el.controls=true;setTimeout(()=>{el.src="";URL.revokeObjectURL(url);},30000);};
         ow.append(el,oo); mWrap.appendChild(ow);
-      } else {
-        if(isImg) { el.src=url; el.onload=()=>URL.revokeObjectURL(url); }
-        else      { el.src=url; el.onloadeddata=()=>URL.revokeObjectURL(url); }
-        mWrap.appendChild(el);
-      }
+      }else{ el.src=url; mWrap.appendChild(el); }
+
+      // Clickable file-name pill below media — opens context popup
+      const pill=document.createElement("div"); pill.className="msg-file-pill";
+      const icon=isAud?"🎵":isVid?"🎬":"🖼";
+      const nameSpan=document.createElement("span"); nameSpan.className="file-name"; nameSpan.textContent=name;
+      const sizeSpan=document.createElement("span"); sizeSpan.className="file-size"; sizeSpan.textContent=_sz(size);
+      pill.append(document.createTextNode(icon+" "), nameSpan, document.createTextNode(" "), sizeSpan);
+      pill.title="Click for options"; pill.style.cursor="pointer";
+      pill.onclick=e=>{e.stopPropagation();_showFilePopup(pill,url);};
+      mWrap.appendChild(pill);
+
       const dl=_dlBtn(blob,name); if(dl)mWrap.appendChild(dl);
       if(expiry>0){
         let rem=expiry; const exp=document.createElement("div"); exp.className="file-expiry";
@@ -2060,18 +2161,24 @@ const uiController = (() => {
       }
       right.append(hdr,mWrap);
     }else{
+      // Generic file pill — always clickable for Open/Download popup
+      const url=URL.createObjectURL(blob);
       const row=document.createElement("div"); row.className="msg-file";
-      row.innerHTML=`<span>📄</span><span class="file-name">${_escapeHtml(name)}</span><span class="file-size">${_sz(size)}</span>`;
+      row.title="Click for options"; row.style.cursor="pointer";
+      const nameSpan=document.createElement("span"); nameSpan.className="file-name"; nameSpan.textContent=name;
+      const sizeSpan=document.createElement("span"); sizeSpan.className="file-size"; sizeSpan.textContent=_sz(size);
+      row.append(document.createTextNode("📄 "), nameSpan, document.createTextNode(" "), sizeSpan);
+      row.onclick=e=>{ if(e.target.classList.contains("file-hint"))return; e.stopPropagation(); _showFilePopup(row,url); };
       if(!oneTime){
         const dl=document.createElement("span"); dl.className="file-hint"; dl.textContent="↓"; dl.style.cursor="pointer";
-        dl.onclick=async()=>{dl.textContent="…";const ok=await filePermissionManager.requestPermission(senderPeer,blob,name);dl.textContent=ok?"✓":"↓";if(ok)filePermissionManager.executeDownload(blob,name);};
+        dl.onclick=async e=>{e.stopPropagation();dl.textContent="…";const ok=await filePermissionManager.requestPermission(senderPeer,blob,name);dl.textContent=ok?"✓":"↓";if(ok)filePermissionManager.executeDownload(blob,name);};
         row.appendChild(dl);
       }
       if(expiry>0){
         let rem=expiry; const exp=document.createElement("div"); exp.className="file-expiry";
         exp.innerHTML=`⏱ <span class="exp-counter">${_fmtTime(rem)}</span>`;
         const cc=exp.querySelector(".exp-counter");
-        const tmr=setInterval(()=>{rem--;cc.textContent=_fmtTime(rem);if(rem<=0){clearInterval(tmr);row.innerHTML='<span style="font-family:var(--font-mono);font-size:.7rem;color:var(--accent-red)">⌛ File expired</span>';}},1000);
+        const tmr=setInterval(()=>{rem--;cc.textContent=_fmtTime(rem);if(rem<=0){clearInterval(tmr);row.textContent="⌛ File expired";URL.revokeObjectURL(url);}},1000);
         right.append(hdr,row,exp);
       }else right.append(hdr,row);
     }
