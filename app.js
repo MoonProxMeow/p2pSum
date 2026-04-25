@@ -474,6 +474,26 @@ const peerManager = (() => {
     uiController.updatePeerList(_conns, _profiles);
     dmManager.onPeerProfileUpdate(pid, p);
     friendsManager.onPeerConnected(pid, p);
+    // FIX friends both-ways: if we have this peer in our friends list (by their friendKey),
+    // send them a friend-request so they add us back. They auto-accept via
+    // handleIncomingRequest when isFriend(senderKey) is true. This makes "Add by key"
+    // work in both directions — whichever side added the other's key will become visible
+    // to the other side the moment they connect, with no manual action required.
+    if (p.friendKey && accountManager.isFriend(p.friendKey)) {
+      const acc = accountManager.get();
+      if (acc.friendKey) {
+        // Small delay so the session settle — the profile message just decrypted
+        setTimeout(async () => {
+          if (encryptionManager.hasSession(pid)) {
+            await sendTo(pid, {type:"friend-request",
+              token: crypto.randomUUID(),
+              senderKey: acc.friendKey,
+              senderName: acc.username,
+              senderAvatar: acc.avatar});
+          }
+        }, 400);
+      }
+    }
   }
 
   function connectTo(pid) {
@@ -531,9 +551,16 @@ const peerManager = (() => {
       // Responder waits — ecdh-hello arrives as a data event and is handled there
     });
     conn.on("data",  async raw => { try { await _handleRaw(conn, raw); } catch (e) { console.warn("Data:", e.message); } });
-    // FIX: check _replacing BEFORE deleting — the _teardown guard needs it still set
-    conn.on("close", () => { if (_replacing.has(pid)) { _replacing.delete(pid); return; } _teardown(pid); });
-    conn.on("error", e => { console.warn("Conn:", e); _replacing.delete(pid); _teardown(pid); });
+    conn.on("close", () => {
+      // Guard 1: silent replacement in progress
+      if (_replacing.has(pid)) { _replacing.delete(pid); return; }
+      // Guard 2: stale close from an OLD DataChannel firing after a reconnect.
+      // If _conns[pid] is already a DIFFERENT connection object, a new channel
+      // is live — don't tear it down.
+      if (_conns[pid] !== conn) return;
+      _teardown(pid);
+    });
+    conn.on("error", e => { console.warn("Conn:", e); _replacing.delete(pid); if (_conns[pid] === conn) _teardown(pid); });
   }
 
   function _startHeartbeat(pid) {
@@ -577,10 +604,17 @@ const peerManager = (() => {
       await _enc(conn, {type:"profile", user:acc.username, avatar:acc.avatar, friendKey:acc.friendKey});
       const known = Object.keys(_conns).filter(p => p !== pid);
       if (known.length) await _enc(conn, {type:"mesh-peers", peers:known});
-      _saveKnownPeers(); // persist room membership so refresh can rejoin
-      // Emoji sync is NOT sent here — sending large base64 blobs inline in the
-      // handshake can exceed WebRTC DataChannel limits and close the connection.
-      // Custom emojis are broadcast lazily when the user adds one (see emojiManager).
+      _saveKnownPeers();
+
+      // FIX custom emojis: send existing emoji set LAZILY after handshake.
+      // Sending inline would risk exceeding the DataChannel buffer limit (~16-64KB).
+      const emojis = accountManager.getCustomEmojis();
+      if (Object.keys(emojis).length) {
+        setTimeout(async () => {
+          if (encryptionManager.hasSession(pid)) await _enc(conn, {type:"emoji-sync", emojis});
+        }, 1200);
+      }
+
       if (callManager.isInCall()) callManager.callPeer(pid);
       return;
     }
@@ -1717,28 +1751,22 @@ const emojiManager = (() => {
     const allEmojis={..._remote,..._custom}; // local takes precedence
     if(!Object.keys(allEmojis).length)return;
     container.querySelectorAll(".msg-text").forEach(el=>{
-      // FIX: idempotent — skip elements that have already been processed for a given
-      // set of emoji names. Without this, repeated calls kept re-wrapping already-
-      // transformed <img> tags (the :name: text was gone but the pattern could match
-      // inside other attributes, corrupting the HTML on every message received).
-      const done = el.dataset.emojiSet || "";
-      const nameSet = Object.keys(allEmojis).sort().join(",");
-      if (done === nameSet) return;
-      // FIX: build replacement using DOM walking instead of innerHTML.replace to
-      // avoid regex metacharacter injection and prevent double-escaping
+      // For each emoji, only process if this element hasn't already substituted it.
+      // Track individually so adding a new emoji only touches elements missing that one.
       Object.entries(allEmojis).forEach(([name, src])=>{
+        const doneKey="emoji_"+name;
+        if(el.dataset[doneKey]==="1")return; // already substituted this emoji in this element
+        el.dataset[doneKey]="1"; // mark before walking so re-entrant calls skip
         const pattern=new RegExp(`:${_reEscape(name)}:`,"g");
-        // Walk text nodes only — safe, no innerHTML parsing
         const walker=document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-        const replacements=[];
+        const hits=[];
         let node;
         while((node=walker.nextNode())){
-          if(!pattern.test(node.nodeValue))continue;
           pattern.lastIndex=0;
-          replacements.push(node);
+          if(pattern.test(node.nodeValue)) hits.push(node);
         }
-        pattern.lastIndex=0;
-        replacements.forEach(textNode=>{
+        hits.forEach(textNode=>{
+          pattern.lastIndex=0;
           const parts=textNode.nodeValue.split(pattern);
           if(parts.length<=1)return;
           const frag=document.createDocumentFragment();
@@ -1748,14 +1776,13 @@ const emojiManager = (() => {
               const img=document.createElement("img");
               img.className="custom-emoji-inline";
               img.alt=`:${name}:`; img.title=`:${name}:`;
-              img.setAttribute("src",src); // setAttribute — not .src — avoids XSS via data: coercion
+              img.setAttribute("src",src);
               frag.appendChild(img);
             }
           });
-          textNode.parentNode.replaceChild(frag,textNode);
+          textNode.parentNode?.replaceChild(frag,textNode);
         });
       });
-      el.dataset.emojiSet=nameSet;
     });
   }
   return { init, setTarget, renderCustomEmojis, receiveRemoteEmojis };
