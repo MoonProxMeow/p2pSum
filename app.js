@@ -436,6 +436,9 @@ const peerManager = (() => {
     p.on("open", async id => {
       // Persist room ID so the same room survives a page refresh
       localStorage.setItem(PEER_ID_KEY, id);
+      // Clear stale peer list — we'll rebuild it as peers confirm their sessions.
+      // Keeping the old list causes ghost peers from previous sessions to persist in UI.
+      localStorage.removeItem(KNOWN_PEERS_KEY);
       _myId = id; _peer = p;
       uiController.setMyId(id);
       await encryptionManager.init();
@@ -443,7 +446,9 @@ const peerManager = (() => {
       friendsManager.init();
       friendsManager.reconcileConnectedPeers();
       _reconnectFriends();
-      // Reconnect any room peers that were connected before the refresh
+      // Reconnect any room peers that were connected before the refresh.
+      // These will only become visible in the peer list once they complete
+      // the ECDH handshake — stale/dead peers will simply time out silently.
       _loadKnownPeers().forEach(pid => { if (pid !== id) connectTo(pid); });
     });
     p.on("connection", conn => _setup(conn));
@@ -616,6 +621,9 @@ const peerManager = (() => {
       await _enc(conn, {type:"profile", user:acc.username, avatar:acc.avatar, friendKey:acc.friendKey});
       const known = Object.keys(_conns).filter(p => p !== pid);
       if (known.length) await _enc(conn, {type:"mesh-peers", peers:known});
+      // Only persist to known-peers after a confirmed live session (post-ECDH).
+      // Saving on raw connection open would persist peers that never completed
+      // the handshake, leaving ghost entries after a refresh.
       _saveKnownPeers();
 
       // FIX custom emojis: send existing emoji set LAZILY after handshake.
@@ -678,7 +686,9 @@ const peerManager = (() => {
         if (data.msgId) window.__seenMsgs.add(data.msgId);
         const msgText = typeof data.text === "string" ? data.text : "";
         uiController.appendMessage({ user:data.user||"Peer", text:msgText, avatar:_profiles[pid]?.avatar||null, isSelf:false, msgId:data.msgId, ts:data.ts||Date.now() });
-        if (dmManager.getActivePid()) document.getElementById("nav-main")?.classList.add("has-unread");
+        // Show unread dot when the group chat view is not currently visible
+        if (document.getElementById("chat-view")?.classList.contains("hidden"))
+          document.getElementById("nav-main")?.classList.add("has-unread");
         break;
       }
       case "message-edit":
@@ -721,20 +731,30 @@ const peerManager = (() => {
     }
   }
 
+  // Tracks teardowns in progress so the 1800ms grace period can't double-fire.
+  const _tearingDown = new Set();
+
   function _teardown(pid) {
     if (_replacing.has(pid)) { _replacing.delete(pid); return; }
-    // Grace period — PeerJS sometimes fires spurious close events when the signaling
-    // server hiccups without the actual WebRTC DataChannel dropping. Wait 2 s; if the
-    // connection re-opens (reconnect won), abort the teardown entirely.
+    // Prevent double-teardown: if a teardown grace period is already running for
+    // this pid, don't start another (e.g. both the close event AND the heartbeat
+    // timeout fire in quick succession, each scheduling their own setTimeout).
+    if (_tearingDown.has(pid)) return;
+    _tearingDown.add(pid);
+
     const hadSession = encryptionManager.hasSession(pid);
     _stopHeartbeat(pid);
     delete _conns[pid]; _pending.delete(pid);
     encryptionManager.removeSession(pid);
     _saveKnownPeers();
+
     setTimeout(() => {
-      // If a fresh connection for this pid was established in the grace window, skip UI update
-      if (_conns[pid]) return;
+      _tearingDown.delete(pid);
+      // If a fresh connection for this pid was re-established in the grace window, skip UI noise.
+      if (_conns[pid] && encryptionManager.hasSession(pid)) return;
       uiController.updatePeerList(_conns, _profiles);
+      // Only say "peer left" if they had a confirmed encrypted session — not
+      // for stale reconnect attempts that never completed the handshake.
       if (hadSession) uiController.appendSystemMessage("A peer left the mesh");
       callManager.removePeerCall(pid);
       friendsManager.onPeerDisconnected(pid);
@@ -1226,6 +1246,7 @@ const dmManager = (() => {
 
   function open(pid) {
     _activePid=pid; _unread[pid]=0;
+    // Enforce view exclusivity — always hide group chat, show DM pane
     document.getElementById("chat-view").classList.add("hidden");
     dmView.classList.remove("hidden");
     const profile=peerManager.getProfile(pid); const name=profile.username||pid.slice(0,8);
@@ -1237,11 +1258,11 @@ const dmManager = (() => {
     _navToDMs(); _renderConvList(); dmInput.focus();
   }
   function closeActiveDM() {
-    _activePid=null; dmView.classList.add("hidden");
+    _activePid=null;
+    dmView.classList.add("hidden");
     document.getElementById("chat-view").classList.remove("hidden");
     document.getElementById("toolbar-channel").textContent="# general";
     document.getElementById("toolbar-desc").textContent="End-to-end encrypted · Full mesh · Per-message ratchet";
-    document.getElementById("nav-main")?.classList.remove("has-unread");
   }
   async function send() {
     const text=dmInput.value.trim(); if(!text||!_activePid)return; dmInput.value="";
@@ -2296,9 +2317,33 @@ function _szG(b){if(!b)return"";if(b<1024)return b+" B";if(b<1048576)return(b/10
     ["main-panel","account-panel","friends-panel","dms-panel"].forEach(id=>document.getElementById(id)?.classList.add("hidden"));
     document.getElementById("settings-panel")?.classList.add("hidden");
     document.getElementById(active)?.classList.add("active");
+    // Always enforce main/DM view exclusivity when navigating away from or back to chat
+    if (active === "nav-main") {
+      // Switching to main chat — close any open DM conversation
+      if (dmManager.getActivePid()) dmManager.closeActiveDM();
+      document.getElementById("chat-view")?.classList.remove("hidden");
+      document.getElementById("dm-view")?.classList.add("hidden");
+    } else if (active !== "nav-dms") {
+      // Any other panel — ensure neither chat view is confusingly visible
+      // (they stay in whatever state they were, but the sidebar is correct)
+    }
   }
-  document.getElementById("nav-main")?.addEventListener("click",()=>{_nav("nav-main");document.getElementById("main-panel")?.classList.remove("hidden");if(dmManager.getActivePid())dmManager.closeActiveDM();});
-  document.getElementById("nav-dms")?.addEventListener("click",()=>{_nav("nav-dms");document.getElementById("dms-panel")?.classList.remove("hidden");document.getElementById("nav-dms-badge")?.classList.add("hidden");dmManager._renderConvList();});
+  document.getElementById("nav-main")?.addEventListener("click",()=>{
+    _nav("nav-main");
+    document.getElementById("main-panel")?.classList.remove("hidden");
+    document.getElementById("nav-main")?.classList.remove("has-unread");
+  });
+  document.getElementById("nav-dms")?.addEventListener("click",()=>{
+    _nav("nav-dms");
+    document.getElementById("dms-panel")?.classList.remove("hidden");
+    document.getElementById("nav-dms-badge")?.classList.add("hidden");
+    dmManager._renderConvList();
+    // If no DM is open, make sure chat-view is visible and dm-view is not
+    if (!dmManager.getActivePid()) {
+      document.getElementById("chat-view")?.classList.remove("hidden");
+      document.getElementById("dm-view")?.classList.add("hidden");
+    }
+  });
   document.getElementById("nav-account")?.addEventListener("click",()=>{_nav("nav-account");document.getElementById("account-panel")?.classList.remove("hidden");});
   document.getElementById("nav-friends")?.addEventListener("click",()=>{_nav("nav-friends");document.getElementById("friends-panel")?.classList.remove("hidden");friendsManager.renderFriends();document.getElementById("nav-friends-badge")?.classList.add("hidden");});
   document.getElementById("nav-settings")?.addEventListener("click",()=>{document.getElementById("nav-settings").classList.add("active");settingsUI.open();});
