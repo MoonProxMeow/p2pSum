@@ -336,6 +336,10 @@ const imageProcessor = (() => {
   function stripMetadata(file) {
     return new Promise(resolve => {
       if (!file.type.startsWith("image/")) { resolve(file); return; }
+      // SVG is XML text — canvas can't safely round-trip it; pass through as-is
+      if (file.type === "image/svg+xml") { resolve(file); return; }
+      // GIF animation frames are lost on canvas round-trip; pass through
+      if (file.type === "image/gif") { resolve(file); return; }
       const url = URL.createObjectURL(file);
       const img = new Image();
       img.onload = () => {
@@ -343,7 +347,15 @@ const imageProcessor = (() => {
         c.width = img.naturalWidth; c.height = img.naturalHeight;
         c.getContext("2d").drawImage(img, 0, 0);
         URL.revokeObjectURL(url);
-        c.toBlob(blob => resolve(new File([blob], file.name, {type:"image/jpeg",lastModified:Date.now()})), "image/jpeg", 0.92);
+        // Preserve original MIME type — re-encoding a PNG as JPEG loses transparency
+        // and breaks type detection on the receiver side.
+        const outType = file.type === "image/jpeg" || file.type === "image/jpg"
+          ? "image/jpeg" : "image/png";
+        const quality = outType === "image/jpeg" ? 0.92 : undefined;
+        c.toBlob(
+          blob => resolve(new File([blob], file.name, {type: outType, lastModified: Date.now()})),
+          outType, quality
+        );
       };
       img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
       img.src = url;
@@ -1113,13 +1125,17 @@ const fileTransferManager = (() => {
   const _in = {};
   function _sz(b) { if(!b)return"";if(b<1024)return b+" B";if(b<1048576)return(b/1024).toFixed(1)+" KB";return(b/1048576).toFixed(1)+" MB"; }
   async function sendFile(file, opts={}, targetPeer=null) {
+    // Strip metadata while preserving MIME type (fixed: was always re-encoding to JPEG)
     if (file.type.startsWith("image/")) file = await imageProcessor.stripMetadata(file);
     const conns = peerManager.getConnections();
-    const peers = targetPeer ? [conns[targetPeer]].filter(Boolean) : Object.values(conns).filter(c=>c.open&&encryptionManager.hasSession(c.peer));
+    const peers = targetPeer
+      ? [conns[targetPeer]].filter(Boolean)
+      : Object.values(conns).filter(c=>c.open&&encryptionManager.hasSession(c.peer));
     if (!peers.length) { uiController.toast("No connected peers."); return; }
     const tid  = crypto.randomUUID().replace(/-/g,"").slice(0,16);
     const acc  = accountManager.get();
-    const meta = {type:"file-meta",id:tid,name:file.name,size:file.size,user:acc.username,oneTime:!!opts.oneTime,spoiler:!!opts.spoiler,expiry:opts.expiry||0,mimeType:file.type};
+    const meta = {type:"file-meta",id:tid,name:file.name,size:file.size,user:acc.username,
+                  oneTime:!!opts.oneTime,spoiler:!!opts.spoiler,expiry:opts.expiry||0,mimeType:file.type};
     uiController.setFileProgress(true, file.name, 0);
     for (const conn of peers) {
       await _enc(conn, meta);
@@ -1134,7 +1150,12 @@ const fileTransferManager = (() => {
       await _enc(conn, {type:"file-end",id:tid,totalChunks:idx});
     }
     uiController.setFileProgress(false);
-    uiController.appendSystemMessage(`Sent: "${file.name}" (${_sz(file.size)})`);
+    // Show sender's own file in chat — previously only showed a system message
+    const blob = new Blob([await file.arrayBuffer()], {type: file.type});
+    if (!targetPeer) {
+      uiController.appendFileMessage(acc.username, file.name, file.size, blob, acc.avatar, null,
+        {oneTime: !!opts.oneTime, spoiler: !!opts.spoiler, expiry: opts.expiry||0});
+    }
   }
   async function _enc(conn, obj) {
     if (!conn.open||!encryptionManager.hasSession(conn.peer)) return;
@@ -1184,11 +1205,15 @@ const dmManager = (() => {
   });
   dmImgInput.addEventListener("change", async function() {
     const f=this.files[0]; if(!f||!_activePid)return; this.value="";
-    const file=await imageProcessor.stripMetadata(f);
-    // FIX: WebRTC DataChannel max reliable message size is ~16-64KB depending
-    // on browser. Base64 expands by ~33%, so a 200KB image → 267KB payload.
-    // Use 30KB as the cutoff so the JSON payload stays safely under 40KB.
-    if(file.size>30*1024){await fileTransferManager.sendFile(file,{},_activePid);return;}
+    // Always route through chunked file transfer for reliable delivery.
+    // The only exception is tiny images (≤8KB) which can safely fit in a single
+    // encrypted DataChannel message (base64 overhead ~33% → ~11KB payload, well
+    // under the ~16KB minimum DataChannel message limit across all browsers).
+    const file = f.type.startsWith("image/") ? await imageProcessor.stripMetadata(f) : f;
+    if (file.size > 8 * 1024) {
+      await fileTransferManager.sendFile(file, {}, _activePid);
+      return;
+    }
     const reader=new FileReader();
     reader.onload=async e=>{
       const b64=e.target.result.split(",")[1]; const acc=accountManager.get();
@@ -2127,7 +2152,16 @@ const uiController = (() => {
       if (!oneTime) {
         const dlBtn = document.createElement("button"); dlBtn.className="btn btn-secondary btn-sm";
         dlBtn.textContent="↓ Download";
-        dlBtn.onclick=async()=>{ pop.remove(); const ok=await filePermissionManager.requestPermission(senderPeer,blob,name); if(ok) filePermissionManager.executeDownload(blob,name); };
+        dlBtn.onclick=async()=>{
+          pop.remove();
+          if (!senderPeer) {
+            // Own file — download directly, no permission request
+            filePermissionManager.executeDownload(blob, name);
+          } else {
+            const ok=await filePermissionManager.requestPermission(senderPeer,blob,name);
+            if(ok) filePermissionManager.executeDownload(blob,name);
+          }
+        };
         pop.appendChild(dlBtn);
       }
       const rect = anchor.getBoundingClientRect();
@@ -2138,7 +2172,7 @@ const uiController = (() => {
     }
 
     function _dlBtn(b2,n2){
-      if(oneTime)return null;
+      if(oneTime||!senderPeer)return null; // no download for one-time or own files
       const btn=document.createElement("button"); btn.className="media-dl-btn"; btn.textContent="↓ Download";
       btn.onclick=async()=>{btn.disabled=true;btn.textContent="Requesting…";const ok=await filePermissionManager.requestPermission(senderPeer,b2,n2);if(ok){filePermissionManager.executeDownload(b2,n2);btn.textContent="✓ Done";}else{btn.disabled=false;btn.textContent="↓ Download";}};
       return btn;
